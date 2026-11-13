@@ -1,0 +1,90 @@
+{
+  "name": "pane",
+  "version": "1.0.0",
+  "description": "窗格 · 通用软件悬浮管理条：把常用的本地程序收在一条贴边窗格上，一键开关、一键唤到前台",
+  "main": "src/main.js",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron . --dev",
+    "dist": "electron-builder --win --x64",
+    "release": "node scripts/release.js"
+  },
+  "devDependencies": {
+    "electron": "^45.3.1",
+    "electron-builder": "^26.18.0"
+  },
+  "build": {
+    "appId": "com.pane.app",
+    "productName": "Pane",
+    "electronDist": "node_modules/electron/dist",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "winmgr.py",
+        "to": "winmgr.py"
+      },
+      {
+        "from": "assets/tray.ico",
+        "to": "assets/tray.ico"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "assets/tray.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowElevation": true,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "窗格",
+      "artifactName": "Pane-Setup-${version}.${ext}",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    },
+    "electronLanguages": [
+      "zh-CN",
+      "zh-TW",
+      "en-US",
+      "en-GB"
+    ],
+    "extraFiles": [],
+    "compression": "maximum",
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "You-cn-Hub",
+        "repo": "pane"
+      }
+    ]
+  },
+  "author": "You-cn-Hub",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/You-cn-Hub/pane.git"
+  },
+  "keywords": [
+    "electron",
+    "launcher",
+    "tray",
+    "productivity",
+    "windows"
+  ]
+}
