@@ -6,6 +6,9 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
+    "test": "node test/paths.test.js",
+    "test:all": "node test/paths.test.js",
+    "check": "node --check src/main.js && node --check src/renderer/app.js",
     "dist": "electron-builder --win --x64",
     "release": "node scripts/release.js"
   },
