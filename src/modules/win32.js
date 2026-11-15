@@ -20,6 +20,7 @@ let psapi = null;
 let fns = null;
 let available = false;
 let enumProto = null;
+let loadError = null;
 
 // ---------- 常量 ----------
 const SW_HIDE = 0;
@@ -82,6 +83,8 @@ function load() {
   } catch (e) {
     available = false;
     fns = null;
+    // 把加载失败的原因暴露出去，否则打包后只能看到「原生不可用」却不知道为什么
+    loadError = (e && (e.stack || e.message)) || String(e);
     return null;
   }
 }
@@ -352,6 +355,7 @@ function isAvailable() {
 
 module.exports = {
   isAvailable,
+  getLoadError: () => loadError,
   listWindows,
   findWindow,
   focus,

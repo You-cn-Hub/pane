@@ -47,7 +47,7 @@ const expandPath = makeExpander(PATHS);
 
 // ---------- 日志 ----------
 const logger = createLogger({
-  logDir: LOG_DIR,
+  logDir: PATHS.LOG_DIR,
   enabled: !!process.env.WB_TRACE,
 });
 const { trace, error: logError } = logger;
@@ -565,7 +565,7 @@ function buildTrayMenu() {
           },
           { type: "separator" },
           { label: "检查更新…", click: () => updater.checkManual() },
-          { label: "打开日志目录", click: () => { try { shell.openPath(LOG_DIR); } catch {} } },
+          { label: "打开日志目录", click: () => { try { shell.openPath(PATHS.LOG_DIR); } catch {} } },
           { type: "separator" },
         ]
       : []),
@@ -1157,6 +1157,11 @@ async function openFileWith(programExe, filePath) {
 let envStatus = { probed: false, ok: true, python: null, message: "", hint: "" };
 
 async function probeEnv() {
+  // 原生加载失败时把原因写进日志，否则只能看到「功能不可用」
+  if (!win32Native.isAvailable()) {
+    const err = win32Native.getLoadError && win32Native.getLoadError();
+    if (err) logError("[win32] 原生加载失败: " + err);
+  }
   try {
     const r = await winmgr.probe();
     envStatus = { probed: true, ...r };
@@ -1689,8 +1694,13 @@ app.whenReady().then(async () => {
   trace("ensureDataDirs done");
   disableProxy(session);
   settings = settingsService.load();
-  const py = await winmgr.resolvePython();
-  trace("python resolved: " + py);
+  // 只有真的走 Python 通道时才解析解释器；原生可用时这行纯属白拉一个进程
+  if (!win32Native.isAvailable()) {
+    const py = await winmgr.resolvePython();
+    trace("python resolved: " + py);
+  } else {
+    trace("native win32 available, skip python");
+  }
   plugins = pluginService.reload();
   trace("plugins loaded: " + plugins.length);
   createWindow();

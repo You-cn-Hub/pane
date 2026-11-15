@@ -10,6 +10,7 @@
 
 const { execFile } = require("child_process");
 const path = require("path");
+const net = require("net");
 
 /**
  * @param {object} deps
@@ -136,8 +137,61 @@ function createWinMgr(deps) {
         if (!w) return { ok: false, error: "not_found" };
         return native.setTopmost(w.hWnd, true);
       }
+      case "kill": {
+        // 关进程：taskkill 是系统自带的，不需要 Python
+        const procName = a.process;
+        if (!procName) return { ok: false, error: "missing_process" };
+        return new Promise((resolve) => {
+          execFile("taskkill", ["/IM", procName, "/F"], { windowsHide: true, timeout: 25000 }, (err, stdout, stderr) => {
+            if (err) {
+              // taskkill 的输出在中文系统上是 GBK，直接当 utf8 读会变乱码，
+              // 所以不能靠文字匹配判断「进程不存在」，改用退出码 + 进程是否真的还在。
+              const stillRunning = native
+                ? native.listWindows(false).some((w) => (w.exe || "").split("\\").pop().toLowerCase() === String(procName).toLowerCase())
+                : false;
+              if (!stillRunning) {
+                return resolve({ ok: true, killed: false, process: procName, detail: "进程未在运行" });
+              }
+              return resolve({ ok: false, error: "关闭失败，进程仍在运行", process: procName });
+            }
+            resolve({ ok: true, killed: true, process: procName, detail: String(stdout || "").trim().slice(0, 160) });
+          });
+        });
+      }
+      case "killport": {
+        // 按端口找 PID 再杀。查连接用 netstat，杀用 taskkill
+        const port = Number(a.port) || 0;
+        if (!port) return { ok: false, error: "missing_port" };
+        return new Promise((resolve) => {
+          execFile("netstat", ["-ano", "-p", "TCP"], { windowsHide: true, timeout: 10000 }, (err, stdout) => {
+            if (err) return resolve({ ok: false, error: "port_not_listening" });
+            const line = String(stdout)
+              .split(/\r?\n/)
+              .find((l) => /LISTENING/i.test(l) && new RegExp(":" + port + "\\s").test(l));
+            if (!line) return resolve({ ok: false, error: "port_not_listening" });
+            const parts = line.trim().split(/\s+/);
+            const pid = parts[parts.length - 1];
+            if (!pid || !/^\d+$/.test(pid)) return resolve({ ok: false, error: "pid_not_found" });
+            execFile("taskkill", ["/PID", pid, "/T", "/F"], { windowsHide: true, timeout: 15000 }, (e2) => {
+              if (e2) return resolve({ ok: false, error: e2.message });
+              resolve({ ok: true, pid: Number(pid), killed: true });
+            });
+          });
+        });
+      }
+      case "lnk": {
+        // 纯 JS 解析，不碰 COM —— 这台机器上 COM 实例化会被拦截，
+        // PowerShell 方案本地能跑、目标机器上不一定能。
+        const src = a.src;
+        if (!src) return { ok: false, error: "missing_src" };
+        try {
+          return require("./lnk").parseLnk(src);
+        } catch (e) {
+          return { ok: false, error: "lnk_parse_failed: " + e.message };
+        }
+      }
       default:
-        return null; // 交给 Python 兜底（assoc / verinfo / lnk / icon 等）
+        return null; // 交给 Python 兜底（assoc / verinfo / icon 等）
     }
   }
   const { winmgrPath: WINMGR, cwd: CWD, log = () => {} } = deps;
