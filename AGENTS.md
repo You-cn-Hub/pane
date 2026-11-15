@@ -34,6 +34,8 @@
 | `proxy.js` | 代理探测 | — |
 | `safefs.js` | **全项目唯一写文件入口**：原子写入、备份滚动、坏文件保留 | **不要直接 fs.writeFileSync 配置文件** |
 | `updater.js` | 自动更新（GitHub Releases） | 失败必须吞掉，不能影响主程序 |
+| `naming.js` | slug 生成、兜底配色（纯函数） | 别再往 main.js 里塞这类工具函数 |
+| `url.js` | 地址栏输入归一化（纯函数） | 内置浏览器的 URL 判定只走这里 |
 | `win32.js` | **原生窗口操作**：koffi 直调 Win32 枚举/聚焦/置顶/隐藏 | 不依赖 Python；失败返回 {ok:false} 不抛异常 |
 | `winmgr.js` | 原生与 Python 的桥接层，**原生优先** | 新功能优先加进 win32.js |
 

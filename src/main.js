@@ -1504,22 +1504,8 @@ ipcMain.handle("win:pin", (_e, on) => {
 
 // ---------- 内置浏览器 ----------
 
-// 用户输入的东西可能是网址、也可能是本机路径，统一成能 load 的 URL
-function normalizeUrl(raw) {
-  let s = String(raw || "").trim();
-  if (!s) return null;
-  if (/^(https?|file|about|data):/i.test(s)) return s;
-  // 本地路径：C:\xxx 或 /xxx 或 \\server\share
-  if (/^[a-z]:[\\/]/i.test(s) || s.startsWith("\\\\")) {
-    return "file:///" + s.replace(/\\/g, "/");
-  }
-  if (/^localhost(:\d+)?/i.test(s) || /^127\.0\.0\.1(:\d+)?/.test(s)) return "http://" + s;
-  // 看着像域名就补 http
-  if (/^[\w-]+(\.[\w-]+)+(:\d+)?([/?#].*)?$/.test(s)) return "http://" + s;
-  // 其它就当成主机名硬拼 http，让它自己报错——比默默跳回首页好懂
-  if (/^[\w-]+(:\d+)?(\/.*)?$/.test(s)) return "http://" + s;
-  return null;
-}
+// URL 归一化已抽到 modules/url.js
+const { normalizeUrl } = require("./modules/url");
 
 ipcMain.handle("browser:go", async (_e, raw) => {
   const u = normalizeUrl(raw);
