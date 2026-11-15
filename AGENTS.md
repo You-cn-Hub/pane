@@ -54,6 +54,7 @@
 
 - **koffi 是原生模块**，打包时必须 `asarUnpack: ["**/node_modules/koffi/**"]`，否则运行时找不到 .node 文件。
 - 新增任何原生依赖都要同步 `build.asarUnpack`。
+- **不要写 `build.electronDist`**。早期为了绕开下载问题硬编码成 `node_modules/electron/dist`，CI 上这个目录不存在会直接失败。electron-builder 自己会找。
 - **`build.directories.output` 必须是相对路径**（写 `release`）。写成 `E:/...` 这种本机绝对路径，GitHub Actions 上会 `mkdir \\? ENOENT`。本地要输出到别处，用 `npm run dist:apps`。
 - 窗口操作优先写在 `win32.js`，不要退回 Python —— 用户机器不一定装 Python。
 
@@ -76,6 +77,8 @@
 | `ELECTRON_RUN_AS_NODE=1` 被污染 | 双击 exe 静默退出，无报错 | 启动时清掉这个环境变量；调试前先 `Remove-Item Env:ELECTRON_RUN_AS_NODE` |
 | 打包时 app 在运行 | `EPERM: unlink ...dll` | 打包前先 `Stop-Process -Name Pane` |
 | 路径拼反斜杠 | PowerShell 里 `\"` 不是转义，路径被吞 | 路径用正斜杠或单引号 |
+| electronDist 硬编码 | CI 报 `The specified electronDist does not exist` | 删掉 `build.electronDist`，让 builder 自动探测 |
+| build 里写绝对路径 | CI 报 `mkdir \\? ENOENT` | output 用相对路径 `release` |
 | koffi.proto 重复定义 | `Duplicate type name` | proto 定义提到模块级，只定义一次 |
 | 中文路径进回收站 | Shell 接口偶发「系统调用级别不正确」 | 先改名再回收，或走 `知识库/40-产物/工具/回收站删除.ps1` |
 

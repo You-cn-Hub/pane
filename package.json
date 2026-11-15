@@ -20,7 +20,6 @@
   "build": {
     "appId": "com.pane.app",
     "productName": "Pane",
-    "electronDist": "node_modules/electron/dist",
     "asar": true,
     "directories": {
       "output": "release"
