@@ -18,6 +18,128 @@ const path = require("path");
  * @param {Function} deps.log       日志回调
  */
 function createWinMgr(deps) {
+  // 优先走原生实现（koffi 直调 Win32），不再依赖 Python。
+  // 保留 Python 通道作为兜底：老机器上万一 koffi 加载失败，仍能工作。
+  const native = require("./win32");
+
+  /** 解析 ["action", "--flag", "val"] 这种数组形式 */
+  function parseArgs(argv) {
+    const out = { action: argv[0], _pos: [] };
+    for (let i = 1; i < argv.length; i++) {
+      const a = argv[i];
+      if (typeof a === "string" && a.startsWith("--")) {
+        const key = a.slice(2);
+        const next = argv[i + 1];
+        if (next === undefined || (typeof next === "string" && next.startsWith("--"))) {
+          out[key] = true;
+        } else {
+          out[key] = next;
+          i++;
+        }
+      } else {
+        out._pos.push(a);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 原生实现的分发。全部返回与 Python 版一致的结构（含 ok 字段）。
+   * 遇到原生不支持的 action 返回 null，交由 Python 兜底。
+   */
+  function runNative(argv) {
+    if (!native.isAvailable()) return null;
+    const a = parseArgs(argv);
+    const wantProc = a.process || a.name;
+    const find = () =>
+      native.findWindow({
+        process: wantProc,
+        klass: a.klass,
+        title: a.title,
+      });
+
+    switch (a.action) {
+      case "procs": {
+        const list = native.listWindows(false);
+        const names = [...new Set(list.map((w) => (w.exe || "").split("\\").pop()).filter(Boolean))];
+        return { ok: true, procs: names };
+      }
+      case "fg": {
+        const r = native.foreground();
+        if (!r.ok) return r;
+        return { ok: true, exe: (r.exe || "").split("\\").pop(), hwnd: r.hWnd ? String(r.hWnd) : null, title: r.title || "" };
+      }
+      case "find": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return { ok: true, found: true, hwnd: String(w.hWnd), title: w.title, rect: w.rect };
+      }
+      case "focus": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return Object.assign(native.focus(w.hWnd), { rect: w.rect });
+      }
+      case "show": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.showWin(w.hWnd);
+      }
+      case "state": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.stateOf(w.hWnd);
+      }
+      case "toggle": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        const st = native.stateOf(w.hWnd);
+        if (!st.ok) return st;
+        // 三态：没在前台 → 唤到前台；在前台但最小化 → 还原；在前台 → 沉底
+        if (!st.foreground) {
+          native.focus(w.hWnd);
+          return { ok: true, action: "focus", focused: true };
+        }
+        if (st.minimized) {
+          native.showWin(w.hWnd);
+          return { ok: true, action: "restore", focused: true };
+        }
+        native.sendBottom(w.hWnd);
+        return { ok: true, action: "bottom", focused: false };
+      }
+      case "bottom": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.sendBottom(w.hWnd);
+      }
+      case "noactivate": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.noActivate(w.hWnd);
+      }
+      case "activate": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.activateWin(w.hWnd);
+      }
+      case "hide": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.hideWin(w.hWnd);
+      }
+      case "close": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.closeWin(w.hWnd);
+      }
+      case "topmost": {
+        const w = find();
+        if (!w) return { ok: false, error: "not_found" };
+        return native.setTopmost(w.hWnd, true);
+      }
+      default:
+        return null; // 交给 Python 兜底（assoc / verinfo / lnk / icon 等）
+    }
+  }
   const { winmgrPath: WINMGR, cwd: CWD, log = () => {} } = deps;
 
   // 打包后没有 node 的 __dirname 里那份解释器，得自己找
@@ -63,8 +185,16 @@ function createWinMgr(deps) {
    * 失败时返回 { ok: false, error }，永远不抛异常。
    */
   async function run(args, timeout = 9000, hide = true) {
+    // 1) 先试原生：绝大多数窗口操作都在这里，不需要 Python
+    try {
+      const r = runNative(args);
+      if (r) return r;
+    } catch (e) {
+      log("[win32] 原生调用失败，退回 Python:", e.message);
+    }
+    // 2) 原生不支持的动作（assoc / verinfo / lnk / icon / exeicon / kill / killport）走 Python
     const py = await resolvePython();
-    if (!py) return { ok: false, error: "no_python" };
+    if (!py) return { ok: false, error: "no_backend", message: "该操作需要 Python，且当前未安装" };
     return new Promise((resolve) => {
       execFile(
         py,
@@ -96,6 +226,10 @@ function createWinMgr(deps) {
    * 返回 { ok, python, message }：ok=false 时界面应明确提示功能受限。
    */
   async function probe() {
+    // 原生可用就不需要 Python 了
+    if (native.isAvailable()) {
+      return { ok: true, python: null, native: true, message: "" };
+    }
     const py = await resolvePython();
     if (!py) {
       return {

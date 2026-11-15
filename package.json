@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/paths.test.js && node test/safefs.test.js",
-    "test:all": "node test/paths.test.js && node test/safefs.test.js",
+    "test": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js",
+    "test:all": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js",
     "check": "node --check src/main.js && node --check src/renderer/app.js",
     "dist": "electron-builder --win --x64",
     "release": "node scripts/release.js"
@@ -26,7 +26,10 @@
     },
     "files": [
       "src/**/*",
-      "package.json"
+      "package.json",
+      "node_modules/**/*",
+      "!node_modules/**/*.md",
+      "!node_modules/**/*.map"
     ],
     "extraResources": [
       {
@@ -75,6 +78,10 @@
         "owner": "You-cn-Hub",
         "repo": "pane"
       }
+    ],
+    "asarUnpack": [
+      "**/node_modules/koffi/**",
+      "**/node_modules/@koromix/**"
     ]
   },
   "author": "You-cn-Hub",
@@ -91,6 +98,7 @@
     "windows"
   ],
   "dependencies": {
-    "electron-updater": "^6.8.11"
+    "electron-updater": "^6.8.11",
+    "koffi": "^3.3.8"
   }
 }

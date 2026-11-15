@@ -23,6 +23,7 @@ const { buildPaths, makeExpander, seedDataDirs } = require("./modules/paths");
 const { createLogger } = require("./modules/logger");
 const { createSettings } = require("./modules/settings");
 const { createWinMgr } = require("./modules/winmgr");
+const win32Native = require("./modules/win32");
 const { createUpdater } = require("./modules/updater");
 const { createPluginService } = require("./modules/plugins");
 const { createIconService } = require("./modules/icons");
@@ -667,6 +668,9 @@ function applyBarHotkey() {
 // 常驻助手：盯前台窗口变化，10ms 级响应，比反复起 Python 轮询快一个量级
 async function startFgDaemon() {
   if (fgDaemon) return;
+  // 原生可用时压根不需要 daemon：直接查一次前台窗口只要 0.2ms，
+  // 而 daemon 要额外拉起一个 Python 常驻进程，纯属浪费。
+  if (win32Native.isAvailable()) return;
   const py = await winmgr.resolvePython();
   if (!py) return;
   try {

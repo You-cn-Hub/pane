@@ -34,6 +34,8 @@
 | `proxy.js` | 代理探测 | — |
 | `safefs.js` | **全项目唯一写文件入口**：原子写入、备份滚动、坏文件保留 | **不要直接 fs.writeFileSync 配置文件** |
 | `updater.js` | 自动更新（GitHub Releases） | 失败必须吞掉，不能影响主程序 |
+| `win32.js` | **原生窗口操作**：koffi 直调 Win32 枚举/聚焦/置顶/隐藏 | 不依赖 Python；失败返回 {ok:false} 不抛异常 |
+| `winmgr.js` | 原生与 Python 的桥接层，**原生优先** | 新功能优先加进 win32.js |
 
 **加新功能前先回答**：这件事 `src/modules/` 里有没有现成的？有就复用，没有才新建模块。
 
@@ -47,6 +49,12 @@
 - 新增一个颜色之前，先看现有变量能不能表达。不能，再往 `:root` 里加，并在 `DESIGN.md` 登记。
 - **禁止在 CSS 里写裸色值**（`#fff` 除外，它是纯白，可接受）。
 - **禁止在 JS 里写界面颜色**。`PALETTE` 是图标兜底配色，属于数据不是样式，可以留。
+
+### 2.1.1 原生依赖
+
+- **koffi 是原生模块**，打包时必须 `asarUnpack: ["**/node_modules/koffi/**"]`，否则运行时找不到 .node 文件。
+- 新增任何原生依赖都要同步 `build.asarUnpack`。
+- 窗口操作优先写在 `win32.js`，不要退回 Python —— 用户机器不一定装 Python。
 
 ### 2.2 窗口行为
 
@@ -67,6 +75,7 @@
 | `ELECTRON_RUN_AS_NODE=1` 被污染 | 双击 exe 静默退出，无报错 | 启动时清掉这个环境变量；调试前先 `Remove-Item Env:ELECTRON_RUN_AS_NODE` |
 | 打包时 app 在运行 | `EPERM: unlink ...dll` | 打包前先 `Stop-Process -Name Pane` |
 | 路径拼反斜杠 | PowerShell 里 `\"` 不是转义，路径被吞 | 路径用正斜杠或单引号 |
+| koffi.proto 重复定义 | `Duplicate type name` | proto 定义提到模块级，只定义一次 |
 | 中文路径进回收站 | Shell 接口偶发「系统调用级别不正确」 | 先改名再回收，或走 `知识库/40-产物/工具/回收站删除.ps1` |
 
 ---
