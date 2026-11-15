@@ -2,7 +2,7 @@
 
 > 把常用的本地程序收进一条贴边窗格：一点开关、一点唤到前台、拖动排序、收进托盘。
 
-![version](https://img.shields.io/badge/version-1.0.0-4ecdc4)
+![version](https://img.shields.io/badge/version-1.1.0-4ecdc4)
 ![platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)
 ![license](https://img.shields.io/badge/license-MIT-green)
 
@@ -30,7 +30,10 @@
 
 - **图标自动提取**：加一个 exe 就完事，不用手动找图标文件。纯 JS 实现（自己解析 `.ico` 与 PE 资源表），不依赖 Python，也不依赖 Pillow
 - **便携运行**：数据存在 exe 旁边的 `data/`，整个文件夹拷走就能用
+- **零运行时依赖**：窗口操作通过 koffi 直调 Win32，**不需要安装 Python 或任何运行时**
 - **本地优先**：只访问 `127.0.0.1`，不联网、不上报任何数据
+- **数据安全**：配置原子写入 + 自动备份，断电或强杀不会写坏
+- **自动更新**：对接 GitHub Releases，有新版本会提示
 - **单实例**：重复启动不会开出第二个，已有的会被唤到前台
 
 ---

@@ -1,6 +1,6 @@
 {
   "name": "pane",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "窗格 · 通用软件悬浮管理条：把常用的本地程序收在一条贴边窗格上，一键开关、一键唤到前台",
   "main": "src/main.js",
   "scripts": {
