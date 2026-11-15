@@ -576,3 +576,51 @@ addBtn.addEventListener("click", async (e) => {
     addBtn.disabled = false;
   }
 });
+
+
+// ---------- 运行环境提示（Python 缺失等） ----------
+
+const envWarn = document.getElementById("envwarn");
+const envWarnText = document.getElementById("envwarn-text");
+const envWarnHint = document.getElementById("envwarn-hint");
+const envDismissKey = "pane.envwarn.dismissed";
+
+function showEnvWarn(s) {
+  if (!envWarn) return;
+  if (!s || s.ok !== false) {
+    envWarn.hidden = true;
+    return;
+  }
+  // 用户手动关掉后，同一台机器不再重复打扰（重新检测时强制显示）
+  if (sessionStorage.getItem(envDismissKey) === "1") {
+    envWarn.hidden = true;
+    return;
+  }
+  envWarnText.textContent = s.message || "部分功能不可用";
+  envWarnHint.textContent = s.hint || "";
+  envWarn.hidden = false;
+}
+
+async function refreshEnv() {
+  try {
+    const s = await window.wb.envStatus();
+    showEnvWarn(s);
+  } catch {}
+}
+
+document.getElementById("envreprobe")?.addEventListener("click", async () => {
+  sessionStorage.removeItem(envDismissKey);
+  try {
+    const s = await window.wb.envReprobe();
+    showEnvWarn(s);
+    if (s && s.ok) envWarn.hidden = true;
+  } catch {}
+});
+
+document.getElementById("envdismiss")?.addEventListener("click", () => {
+  sessionStorage.setItem(envDismissKey, "1");
+  if (envWarn) envWarn.hidden = true;
+});
+
+// 启动后延迟一点探测，别和首屏渲染抢
+setTimeout(refreshEnv, 1500);

@@ -9,6 +9,7 @@
 
 const fs = require("fs");
 const path = require("path");
+const { writeFileSafe, readJsonSafe } = require("./safefs");
 
 /**
  * @param {object} deps
@@ -70,7 +71,7 @@ function createPluginService(deps) {
   }
 
   function writeOrder(ids) {
-    fs.writeFileSync(ORDER_FILE, JSON.stringify(ids, null, 2), "utf-8");
+    writeFileSafe(ORDER_FILE, JSON.stringify(ids, null, 2));
   }
 
   function rank(p) {
@@ -86,14 +87,16 @@ function createPluginService(deps) {
       .readdirSync(PLUGIN_DIR)
       .filter((f) => f.endsWith(".json"))
       .map((f) => {
-        try {
-          const p = JSON.parse(fs.readFileSync(path.join(PLUGIN_DIR, f), "utf-8"));
-          p._file = f;
-          return p;
-        } catch (e) {
-          console.error("[plugin] 解析失败", f, e.message);
+        // 解析失败时把坏文件改名保留（.corrupt-时间戳），不静默丢弃
+        const r = readJsonSafe(path.join(PLUGIN_DIR, f));
+        if (!r.ok) {
+          if (r.corrupt) console.error("[plugin] 解析失败，已保留为", path.basename(r.corrupt));
           return null;
         }
+        const p = r.data;
+        if (!p || typeof p !== "object") return null;
+        p._file = f;
+        return p;
       })
       .filter((p) => p && p.enabled !== false && p.id);
 
@@ -136,7 +139,8 @@ function createPluginService(deps) {
     const file = path.join(PLUGIN_DIR, p._file || `${p.id}.json`);
     const cfg = Object.assign({}, p);
     delete cfg._file;
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+    // 原子写入 + 覆盖前备份，避免写到一半断电把配置写坏
+    writeFileSafe(file, JSON.stringify(cfg, null, 2));
     p._file = path.basename(file);
     return file;
   }

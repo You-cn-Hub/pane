@@ -551,3 +551,17 @@ body.dragging .grip { background: rgba(255, 255, 255, 0.5); }
   background: rgba(18, 18, 22, 0.98);
   border-bottom: 1px solid var(--line);
 }
+
+/* 环境警告条：Python 缺失等能力受限提示，可关闭 */
+.envwarn {
+  margin: 8px 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 8px;
+  background: rgba(226, 75, 74, .08);
+  font-size: 12px;
+  line-height: 1.5;
+}
+.envwarn-t { color: var(--danger-soft); font-weight: 600; margin-bottom: 4px; }
+.envwarn-h { color: var(--muted); margin-bottom: 8px; }
+.envwarn-a { display: flex; gap: 8px; }

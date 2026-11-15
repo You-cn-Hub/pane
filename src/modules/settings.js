@@ -5,6 +5,7 @@
  */
 
 const fs = require("fs");
+const { writeFileSafe, readJsonSafe } = require("./safefs");
 
 const DEFAULTS = { toggleHotkey: "Ctrl+F9" };
 
@@ -18,19 +19,16 @@ function createSettings(deps) {
 
   function load() {
     if (cache) return cache;
-    try {
-      const raw = JSON.parse(fs.readFileSync(SETTINGS_FILE, "utf-8"));
-      cache = Object.assign({}, DEFAULTS, raw);
-    } catch {
-      cache = Object.assign({}, DEFAULTS);
-    }
+    // 解析失败时坏文件会被改名保留，这里退回默认值继续运行
+    const r = readJsonSafe(SETTINGS_FILE);
+    cache = r.ok ? Object.assign({}, DEFAULTS, r.data) : Object.assign({}, DEFAULTS);
     return cache;
   }
 
   function save(patch) {
     cache = Object.assign({}, load(), patch);
     try {
-      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(cache, null, 2), "utf-8");
+      writeFileSafe(SETTINGS_FILE, JSON.stringify(cache, null, 2));
     } catch (e) {
       console.error("[settings] 保存失败:", e.message);
       return { ok: false, error: e.message };

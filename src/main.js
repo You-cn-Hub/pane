@@ -17,11 +17,13 @@ const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut, We
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
+const { writeFileSafe, readJsonSafe, cleanupTempFiles } = require("./modules/safefs");
 
 const { buildPaths, makeExpander, seedDataDirs } = require("./modules/paths");
 const { createLogger } = require("./modules/logger");
 const { createSettings } = require("./modules/settings");
 const { createWinMgr } = require("./modules/winmgr");
+const { createUpdater } = require("./modules/updater");
 const { createPluginService } = require("./modules/plugins");
 const { createIconService } = require("./modules/icons");
 const { createLauncher, sleep } = require("./modules/launcher");
@@ -95,6 +97,14 @@ const winmgr = createWinMgr({
   cwd: APP_DIR,
   log: trace,
 });
+
+// 自动更新：从 GitHub Releases 拉新版，失败不影响主程序
+const updater = createUpdater({
+  log: (m) => console.log(m),
+  onStatus: (s) => {
+    if (win) win.webContents.send("update:status", s);
+  },
+});
 const runWinMgr = winmgr.run;
 
 // 程序条目
@@ -134,6 +144,11 @@ const { portOpen, launchDetached, resolveWindow, launchOnly, quitApp } = launche
 // 否则新装的用户打开是一片空白。开发模式数据本来就在程序目录，什么都不做。
 function ensureDataDirs() {
   seedDataDirs(PATHS, { isPackaged: app.isPackaged, log: (m) => console.log(m) });
+  // 清理上次异常退出遗留的临时文件（原子写入的 .tmp）
+  try {
+    const n = cleanupTempFiles(PATHS.PLUGIN_DIR);
+    if (n > 0) console.log(`[data] 清理了 ${n} 个残留临时文件`);
+  } catch {}
 }
 
 // ---------- 图标 ----------
@@ -432,7 +447,7 @@ function createWindow() {
   const savePos = () => {
     try {
       const [x, y] = win.getPosition();
-      fs.writeFileSync(posFile, JSON.stringify({ x, y }));
+      writeFileSafe(posFile, JSON.stringify({ x, y }));
     } catch {}
   };
   win.on("moved", savePos);
@@ -541,6 +556,8 @@ function buildTrayMenu() {
               refreshTray();
             },
           },
+          { type: "separator" },
+          { label: "检查更新…", click: () => updater.checkManual() },
           { type: "separator" },
         ]
       : []),
@@ -682,14 +699,26 @@ async function startFgDaemon() {
   });
 }
 
+/** daemon 是否真的活着（进程存在且未退出） */
+function fgDaemonAlive() {
+  try {
+    return !!(fgDaemon && fgDaemon.exitCode === null && !fgDaemon.killed);
+  } catch {
+    return false;
+  }
+}
+
 function startAutoHide() {
   startFgDaemon();
-  // 兜底：daemon 万一挂了，每 3 秒查一次
+  // 兜底：daemon 挂了才需要轮询。
+  // 每启动一次 winmgr 都要拉一个 Python 进程（100~200ms），3 秒一次一天就是两万多次，
+  // 对笔记本电量不友好。降到 10 秒，并在 daemon 存活时完全跳过。
   if (autoHideTimer) return;
   autoHideTimer = setInterval(async () => {
+    if (fgDaemonAlive()) return; // daemon 在跑，轮询没意义
     const r = await runWinMgr(["fg"]);
     applyForeground(r);
-  }, 3000);
+  }, 10000);
 }
 
 // ---------- 快捷键 ----------
@@ -944,7 +973,7 @@ async function ensureProgram(exe, opt = {}) {
           args: L.args || [],
           workdir: L.workdir || cfg.launch.workdir || "",
         });
-        fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+        writeFileSafe(file, JSON.stringify(cfg, null, 2));
       } catch {}
     }
 
@@ -965,7 +994,7 @@ async function ensureProgram(exe, opt = {}) {
             const file = path.join(PLUGIN_DIR, `${exist.id}.json`);
             const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
             cfg.iconHint = hint;
-            fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+            writeFileSafe(file, JSON.stringify(cfg, null, 2));
           } catch {}
         }
       }
@@ -1009,7 +1038,7 @@ async function ensureProgram(exe, opt = {}) {
     addedAt: new Date().toISOString().slice(0, 10),
   };
   try {
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+    writeFileSafe(file, JSON.stringify(cfg, null, 2));
   } catch (e) {
     return { ok: false, error: `写入配置失败：${e.message}` };
   }
@@ -1057,7 +1086,7 @@ async function addFile(filePath) {
     try {
       const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
       cfg.files = p.files;
-      fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+      writeFileSafe(file, JSON.stringify(cfg, null, 2));
     } catch {}
   }
 
@@ -1098,7 +1127,7 @@ async function registerProgram(exe) {
     addedAt: new Date().toISOString().slice(0, 10),
   };
   try {
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+    writeFileSafe(file, JSON.stringify(cfg, null, 2));
   } catch (e) {
     return { ok: false, error: `写入配置失败：${e.message}` };
   }
@@ -1126,6 +1155,31 @@ async function openFileWith(programExe, filePath) {
 }
 
 // ---------- IPC ----------
+
+// 运行环境状态：启动后探测一次，界面据此提示「功能受限」
+let envStatus = { probed: false, ok: true, python: null, message: "", hint: "" };
+
+async function probeEnv() {
+  try {
+    const r = await winmgr.probe();
+    envStatus = { probed: true, ...r };
+    if (!r.ok) console.error("[env] " + r.message);
+  } catch (e) {
+    envStatus = { probed: true, ok: true, python: null, message: "", hint: "" };
+  }
+  return envStatus;
+}
+
+ipcMain.handle("env:status", async () => envStatus);
+
+ipcMain.handle("update:check", async () => updater.checkManual());
+ipcMain.handle("update:state", async () => updater.getState());
+
+ipcMain.handle("env:reprobe", async () => {
+  // 清掉缓存的解释器路径，重新找一遍
+  envStatus = { probed: false, ok: true, python: null, message: "", hint: "" };
+  return probeEnv();
+});
 
 ipcMain.handle("plugins:list", async () => {
   const procs = await runningProcs();
@@ -1339,7 +1393,7 @@ ipcMain.handle("app:detachFile", async (_e, id, filePath) => {
   try {
     const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
     cfg.files = (cfg.files || []).filter((f) => f !== filePath);
-    fs.writeFileSync(file, JSON.stringify(cfg, null, 2), "utf-8");
+    writeFileSafe(file, JSON.stringify(cfg, null, 2));
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -1384,7 +1438,7 @@ ipcMain.handle("plugins:reorder", async (_e, ids) => {
     if (!clean.includes(p.id)) clean.push(p.id);
   }
   try {
-    fs.writeFileSync(ORDER_FILE, JSON.stringify(clean, null, 2), "utf-8");
+    writeFileSafe(ORDER_FILE, JSON.stringify(clean, null, 2));
   } catch (e) {
     return { ok: false, error: `保存顺序失败：${e.message}` };
   }
@@ -1413,7 +1467,7 @@ ipcMain.handle("app:removeProgram", async (_e, id) => {
     if (Array.isArray(order)) {
       const left = order.filter((x) => x !== id);
       if (left.length !== order.length) {
-        fs.writeFileSync(ORDER_FILE, JSON.stringify(left, null, 2), "utf-8");
+        writeFileSafe(ORDER_FILE, JSON.stringify(left, null, 2));
       }
     }
   } catch {}
@@ -1640,6 +1694,8 @@ process.on("unhandledRejection", (e) => _dbg("unhandled", e));
 
 app.whenReady().then(async () => {
   trace("whenReady, packaged=" + app.isPackaged + " data=" + DATA_DIR + " res=" + RES_DIR);
+  // 探测运行环境（Python 是否可用），结果供界面提示
+  probeEnv();
   if (isSecondInstance) return;
   ensureDataDirs();
   trace("ensureDataDirs done");
@@ -1659,4 +1715,11 @@ app.whenReady().then(async () => {
   trace("ready");
   // 图标自愈放后台跑，不拖慢启动
   healMissingIcons().catch(() => {});
+  // 自动更新：先初始化，延迟 10 秒再检查，别和启动抢资源
+  try {
+    updater.init();
+    setTimeout(() => updater.checkSilent(), 10000);
+  } catch (e) {
+    console.error("[update] 初始化失败:", e.message);
+  }
 });

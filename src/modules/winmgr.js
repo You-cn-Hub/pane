@@ -91,7 +91,24 @@ function createWinMgr(deps) {
     return a;
   }
 
-  return { run, findArgs, resolvePython };
+  /**
+   * 探测运行环境，供界面显示能力状态。
+   * 返回 { ok, python, message }：ok=false 时界面应明确提示功能受限。
+   */
+  async function probe() {
+    const py = await resolvePython();
+    if (!py) {
+      return {
+        ok: false,
+        python: null,
+        message: "未检测到 Python。窗口切换、自动隐藏、置顶这些功能将不可用。",
+        hint: "安装 Python 3（勾选 Add to PATH）后重启本程序即可恢复。",
+      };
+    }
+    return { ok: true, python: py, message: "" };
+  }
+
+  return { run, findArgs, resolvePython, probe };
 }
 
 module.exports = { createWinMgr };

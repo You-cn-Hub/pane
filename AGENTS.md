@@ -32,6 +32,8 @@
 | `settings.js` | 设置读写 | 别直接 fs 读写 settings.json |
 | `logger.js` | 日志 | 别用 console.log 代替 |
 | `proxy.js` | 代理探测 | — |
+| `safefs.js` | **全项目唯一写文件入口**：原子写入、备份滚动、坏文件保留 | **不要直接 fs.writeFileSync 配置文件** |
+| `updater.js` | 自动更新（GitHub Releases） | 失败必须吞掉，不能影响主程序 |
 
 **加新功能前先回答**：这件事 `src/modules/` 里有没有现成的？有就复用，没有才新建模块。
 

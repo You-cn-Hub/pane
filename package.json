@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/paths.test.js",
-    "test:all": "node test/paths.test.js",
+    "test": "node test/paths.test.js && node test/safefs.test.js",
+    "test:all": "node test/paths.test.js && node test/safefs.test.js",
     "check": "node --check src/main.js && node --check src/renderer/app.js",
     "dist": "electron-builder --win --x64",
     "release": "node scripts/release.js"
@@ -22,7 +22,7 @@
     "electronDist": "node_modules/electron/dist",
     "asar": true,
     "directories": {
-      "output": "release"
+      "output": "E:/Data/Apps/_build"
     },
     "files": [
       "src/**/*",
@@ -89,5 +89,8 @@
     "tray",
     "productivity",
     "windows"
-  ]
+  ],
+  "dependencies": {
+    "electron-updater": "^6.8.11"
+  }
 }
