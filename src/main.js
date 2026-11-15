@@ -47,10 +47,16 @@ const expandPath = makeExpander(PATHS);
 
 // ---------- 日志 ----------
 const logger = createLogger({
-  traceFile: PATHS.TRACE_FILE,
+  logDir: LOG_DIR,
   enabled: !!process.env.WB_TRACE,
 });
 const { trace, error: logError } = logger;
+// 清理过期日志（保留 7 天）
+try {
+  const n = logger.cleanup();
+  if (n > 0) trace("清理了 " + n + " 个过期日志");
+} catch {}
+
 trace("module loaded");
 
 // ---------- 设置 ----------
@@ -559,6 +565,7 @@ function buildTrayMenu() {
           },
           { type: "separator" },
           { label: "检查更新…", click: () => updater.checkManual() },
+          { label: "打开日志目录", click: () => { try { shell.openPath(LOG_DIR); } catch {} } },
           { type: "separator" },
         ]
       : []),
@@ -747,22 +754,8 @@ function registerHotkeys() {
 
 // ---------- 自助添加程序 ----------
 
-const PALETTE = ["#5B8DEF", "#3FA796", "#C0803E", "#8A6FD1", "#D1605B", "#4C9AD1", "#7BA05B", "#C46BA8"];
-
-function slugify(name) {
-  return (
-    name
-      .toLowerCase()
-      .replace(/[^a-z0-9\u4e00-\u9fa5]+/g, "-")
-      .replace(/^-+|-+$/g, "") || "app"
-  );
-}
-
-function pickColor(seed) {
-  let h = 0;
-  for (const c of seed) h = (h * 31 + c.charCodeAt(0)) >>> 0;
-  return PALETTE[h % PALETTE.length];
-}
+// 标识与配色已抽到 modules/naming.js（纯函数，可单测）
+const { slugify, pickColor, PALETTE } = require("./modules/naming");
 
 // 在程序目录里找图标文件。Electron 应用的 exe 里往往只嵌了通用图标，
 // 真图标通常放在 resources 或上一级目录里，所以这里翻一遍。
@@ -1686,9 +1679,14 @@ app.on("window-all-closed", () => {
 });
 
 const _dbg = (tag, e) => {
+  // 崩溃信息必须落到用户找得到的地方（data/logs），不能只写临时目录
+  try {
+    logError("[crash] " + tag, e);
+  } catch {}
+  // 双写一份到临时目录，便于极端情况下排查（日志目录不可写时）
   try {
     require("fs").appendFileSync(
-      require("path").join(require("os").tmpdir(), "wb-crash.txt"),
+      require("path").join(require("os").tmpdir(), "pane-crash.txt"),
       `[${tag}] ${(e && e.stack) || e}\n\n`
     );
   } catch {}

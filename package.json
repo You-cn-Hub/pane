@@ -6,11 +6,12 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js",
-    "test:all": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js",
+    "test": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js",
+    "test:all": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js",
     "check": "node --check src/main.js && node --check src/renderer/app.js",
     "dist": "electron-builder --win --x64",
-    "release": "node scripts/release.js"
+    "release": "node scripts/release.js",
+    "dist:apps": "electron-builder --win --x64 --config.directories.output=E:/Data/Apps/_build"
   },
   "devDependencies": {
     "electron": "^45.3.1",
@@ -22,7 +23,7 @@
     "electronDist": "node_modules/electron/dist",
     "asar": true,
     "directories": {
-      "output": "E:/Data/Apps/_build"
+      "output": "release"
     },
     "files": [
       "src/**/*",

@@ -54,6 +54,7 @@
 
 - **koffi 是原生模块**，打包时必须 `asarUnpack: ["**/node_modules/koffi/**"]`，否则运行时找不到 .node 文件。
 - 新增任何原生依赖都要同步 `build.asarUnpack`。
+- **`build.directories.output` 必须是相对路径**（写 `release`）。写成 `E:/...` 这种本机绝对路径，GitHub Actions 上会 `mkdir \\? ENOENT`。本地要输出到别处，用 `npm run dist:apps`。
 - 窗口操作优先写在 `win32.js`，不要退回 Python —— 用户机器不一定装 Python。
 
 ### 2.2 窗口行为

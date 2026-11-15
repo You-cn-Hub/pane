@@ -39,6 +39,7 @@ function buildPaths({ isPackaged, appDir, userDataDir, resourcesPath, exeDir }) 
     SETTINGS_FILE: path.join(DATA_DIR, "settings.json"),
     WINMGR: path.join(RES_DIR, "winmgr.py"),
     SERVER_DIR: path.join(RES_DIR, "server"),
+    LOG_DIR: path.join(DATA_DIR, "logs"),
     TRACE_FILE: path.join(DATA_DIR, "_trace.log"),
     ICON_LOG: path.join(DATA_DIR, "_icon.log"),
   };
