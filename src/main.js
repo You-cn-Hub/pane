@@ -67,6 +67,12 @@ const settingsService = createSettings({ settingsFile: PATHS.SETTINGS_FILE });
 clearProxyEnv();
 
 // ---------- 悬浮台尺寸 ----------
+// 悬浮窗置顶层级。
+// 不能用 "floating"：它层级偏低，别的程序用 HWND_TOPMOST 置顶后会盖住我们。
+// "screen-saver" 是 Electron 在 Windows 上能拿到的最高常规层级，
+// 只有真正的 UAC 安全桌面能压住它。
+const TOP_LEVEL = "screen-saver";
+
 const BAR_W = 214;
 const BAR_H = 496;
 const PANEL_W = 880;
@@ -434,7 +440,7 @@ function createWindow() {
     },
   });
 
-  win.setAlwaysOnTop(true, "floating");
+  win.setAlwaysOnTop(true, TOP_LEVEL);
   win.setResizable(false);
   try {
     win.setMinimumSize(BAR_W, BAR_H);
@@ -506,7 +512,7 @@ function toggleWin() {
     try {
       win.moveTop();
     } catch {}
-    if (win.isAlwaysOnTop()) win.setAlwaysOnTop(true, "floating");
+    if (win.isAlwaysOnTop()) win.setAlwaysOnTop(true, TOP_LEVEL);
     sunk = false;
     graceUntil = Date.now() + 5000;
   } else {
@@ -527,7 +533,7 @@ function buildTrayMenu() {
       click: (item) => {
         if (!win) return;
         // 取消置顶时 level 必须是 normal，否则 Electron 传 floating 不会真正取消
-        win.setAlwaysOnTop(item.checked, item.checked ? "floating" : "normal");
+        win.setAlwaysOnTop(item.checked, item.checked ? TOP_LEVEL : "normal");
         win.webContents.send("state:changed", { msg: item.checked ? "已置顶" : "已取消置顶" });
         refreshTray();
       },
@@ -1545,7 +1551,7 @@ ipcMain.handle("win:pin", (_e, on) => {
   if (!win) return false;
   const next = typeof on === "boolean" ? on : !win.isAlwaysOnTop();
   // 取消置顶时 level 必须是 normal，否则 Electron 传 floating 不会真正取消
-  win.setAlwaysOnTop(next, next ? "floating" : "normal");
+  win.setAlwaysOnTop(next, next ? TOP_LEVEL : "normal");
   return next;
 });
 
@@ -1695,7 +1701,7 @@ ipcMain.handle("panel:hide", () => {
 app.on("second-instance", () => {
   if (!win) return;
   win.show();
-  win.setAlwaysOnTop(true, "floating");
+  win.setAlwaysOnTop(true, TOP_LEVEL);
   lastFg = 0;
   graceUntil = Date.now() + 4000;
   refreshTray();
