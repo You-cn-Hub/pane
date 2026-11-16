@@ -3,15 +3,15 @@
   --muted: #9c9ca4;
   --faint: #7d7d87;
   --ok: #3fbf8f;
-  --ok-hover: var(--ok-hover);
-  --info: var(--info);
-  --danger: var(--danger);
-  --danger-soft: var(--danger-soft);
-  --toggle-off: var(--toggle-off);
+  --ok-hover: #6ee0b4;
+  --info: #b7cdfb;
+  --danger: #e24b4a;
+  --danger-soft: #ff8b8b;
+  --toggle-off: #e8e8ec;
   --line: rgba(255, 255, 255, 0.09);
   --white: #fff;
-  --danger-bg: var(--danger-bg);
-  --white-hover: var(--white-hover);
+  --danger-bg: rgba(224, 75, 74, .8);
+  --white-hover: rgba(255, 255, 255, .12);
 }
 * { box-sizing: border-box; margin: 0; padding: 0; }
 html, body {
@@ -368,7 +368,8 @@ body.dragging .grip { background: rgba(255, 255, 255, 0.5); }
   transition: background .1s;
 }
 .rmi:hover { background: rgba(255, 255, 255, .1); }
-.rmi.danger { color: var(--danger-soft); }
+/* 删除是危险操作：用亮红 + 微加粗，保证在深色菜单上足够醒目 */
+.rmi.danger { color: var(--danger-soft); font-weight: 600; }
 .rmi.danger:hover { background: rgba(224, 75, 74, .22); }
 .rmi.disabled {
   color: var(--faint);
