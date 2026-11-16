@@ -74,6 +74,8 @@ function load() {
       PostMessageW: user32.func("bool PostMessageW(intptr_t hWnd, uint32 msg, intptr_t w, intptr_t l)"),
       IsIconic: user32.func("bool IsIconic(intptr_t hWnd)"),
       GetWindowRect: user32.func("bool GetWindowRect(intptr_t hWnd, _Out_ int32_t* rect)"),
+      GetWindowPlacement: user32.func("bool GetWindowPlacement(intptr_t hWnd, _Out_ uint8_t* wp)"),
+      SetWindowPlacement: user32.func("bool SetWindowPlacement(intptr_t hWnd, const uint8_t* wp)"),
       OpenProcess: kernel32.func("intptr_t OpenProcess(uint32 access, bool inherit, uint32 pid)"),
       CloseHandle: kernel32.func("bool CloseHandle(intptr_t h)"),
       QueryFullProcessImageNameW: kernel32.func("bool QueryFullProcessImageNameW(intptr_t h, uint32 flags, _Out_ uint16_t* buf, _Inout_ uint32* size)"),
@@ -390,6 +392,82 @@ function stateOf(hWnd) {
   }
 }
 
+// ---------- 最小化 / 还原 ----------
+
+const SW_SHOWNORMAL = 1;
+
+/**
+ * 读 WINDOWPLACEMENT 的 showCmd。
+ * 结构：length(4) flags(4) showCmd(4) ptMin(8) ptMax(8) rcNormal(16) = 44 字节
+ */
+function showCmdOf(hWnd) {
+  if (!load()) return -1;
+  const buf = Buffer.alloc(44);
+  buf.writeUInt32LE(44, 0);
+  try {
+    if (!fns.GetWindowPlacement(hWnd, buf)) return -1;
+    return buf.readUInt32LE(8);
+  } catch {
+    return -1;
+  }
+}
+
+/**
+ * 最小化。
+ *
+ * 只用 ShowWindow(SW_MINIMIZE) 不可靠：它不改 WINDOWPLACEMENT，
+ * 有些 Electron 窗口还会立刻弹回来。所以直接改 showCmd 再回写。
+ */
+function minimizeWin(hWnd) {
+  if (!load()) return { ok: false, error: "no_native" };
+  try {
+    const buf = Buffer.alloc(44);
+    buf.writeUInt32LE(44, 0);
+    if (!fns.GetWindowPlacement(hWnd, buf)) return { ok: false, error: "get_placement_failed" };
+    buf.writeUInt32LE(SW_SHOWMINIMIZED, 8);
+    fns.SetWindowPlacement(hWnd, buf);
+    // 兜底：有些程序不认 SetWindowPlacement，再补一次 ShowWindow
+    const after = showCmdOf(hWnd);
+    if (after !== SW_SHOWMINIMIZED) {
+      fns.ShowWindow(hWnd, 6); // SW_MINIMIZE
+    }
+    return { ok: true, minimized: true, showCmd: showCmdOf(hWnd) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** 从最小化还原到正常大小 */
+function restoreWin(hWnd) {
+  if (!load()) return { ok: false, error: "no_native" };
+  try {
+    const buf = Buffer.alloc(44);
+    buf.writeUInt32LE(44, 0);
+    if (!fns.GetWindowPlacement(hWnd, buf)) {
+      fns.ShowWindow(hWnd, SW_RESTORE);
+      return { ok: true, restored: true };
+    }
+    buf.writeUInt32LE(SW_SHOWNORMAL, 8);
+    fns.SetWindowPlacement(hWnd, buf);
+    fns.ShowWindow(hWnd, SW_RESTORE);
+    return { ok: true, restored: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/** 窗口当前是不是「开着」的状态（可见且没最小化） */
+function isOpen(hWnd) {
+  if (!load()) return false;
+  try {
+    const visible = !!fns.IsWindowVisible(hWnd);
+    const cmd = showCmdOf(hWnd);
+    return visible && cmd !== SW_SHOWMINIMIZED;
+  } catch {
+    return false;
+  }
+}
+
 function isAvailable() {
   load();
   return !!fns;
@@ -411,4 +489,8 @@ module.exports = {
   moveWin,
   foreground,
   stateOf,
+  minimizeWin,
+  restoreWin,
+  isOpen,
+  showCmdOf,
 };

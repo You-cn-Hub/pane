@@ -90,41 +90,51 @@ function createWinMgr(deps) {
         if (!w) return { ok: false, error: "not_found" };
         return native.stateOf(w.hWnd);
       }
-      case "toggle": {
-        const w = find();
-        if (!w) return { ok: false, error: "not_found" };
-        // Electron 类应用有多个同 pid 的窗口，findWindow 可能挑中无标题的辅助窗口，
-        // 那种窗口聚焦了也不会把主界面带出来。这里再筛一次，优先有标题的。
-        if (!w.title && wantProc) {
-          const sameProc = native
+            case "toggle": {
+        // 两态切换（与 Python 版语义一致）：
+        //   开着  → 最小化
+        //   收着  → 还原并唤到前台
+        //
+        // 判断依据是 visible + showCmd，不用 foreground：
+        // 窗口最小化后仍然是前台窗口，拿 foreground 判断会乱。
+        //
+        // Electron 应用有多个同 pid 的窗口，必须先筛出「有标题的主窗口」，
+        // 否则会去最小化一个看不见的辅助窗口，用户以为没反应。
+        const pickMain = () => {
+          if (!wantProc) return find();
+          const same = native
             .listWindows(true)
             .filter((x) => (x.exe || "").split("\\").pop().toLowerCase() === String(wantProc).toLowerCase())
-            .filter((x) => x.title);
-          if (sameProc.length) {
-            const better = sameProc.find((x) => x.visible) || sameProc[0];
-            return (() => {
-              const st2 = native.stateOf(better.hWnd);
-              if (!st2.ok) return st2;
-              if (!st2.foreground) { native.focus(better.hWnd); return { ok: true, action: "focus", focused: true }; }
-              if (st2.minimized) { native.showWin(better.hWnd); return { ok: true, action: "restore", focused: true }; }
-              native.sendBottom(better.hWnd);
-              return { ok: true, action: "bottom", focused: false };
-            })();
+            .filter((x) => x.title)
+            .filter((x) => !/^(IME|MSCTFIME UI)$/i.test(x.cls || ""));
+          if (!same.length) return find();
+          // 有多个时优先当前开着的那个
+          const open = same.find((x) => native.isOpen(x.hWnd));
+          return open || same[0];
+        };
+
+        const w = pickMain();
+        if (!w) return { ok: false, error: "not_found" };
+
+        const opened = native.isOpen(w.hWnd);
+
+        if (opened) {
+          const mr = native.minimizeWin(w.hWnd);
+          if (!mr.ok) return mr;
+          // 有些无边框 / 全屏覆盖层不接受最小化，会立刻弹回来，
+          // 这时改用隐藏，效果等同于收进托盘
+          if (!native.isOpen(w.hWnd)) {
+            return { ok: true, action: "minimize", focused: false };
           }
+          native.hideWin(w.hWnd);
+          return { ok: true, action: "hide", focused: false };
         }
-        const st = native.stateOf(w.hWnd);
-        if (!st.ok) return st;
-        // 三态：没在前台 → 唤到前台；在前台但最小化 → 还原；在前台 → 沉底
-        if (!st.foreground) {
-          native.focus(w.hWnd);
-          return { ok: true, action: "focus", focused: true };
-        }
-        if (st.minimized) {
-          native.showWin(w.hWnd);
-          return { ok: true, action: "restore", focused: true };
-        }
-        native.sendBottom(w.hWnd);
-        return { ok: true, action: "bottom", focused: false };
+
+        // 收着 → 还原并唤到前台
+        const rr = native.restoreWin(w.hWnd);
+        if (!rr.ok) return rr;
+        native.focus(w.hWnd);
+        return { ok: true, action: "front", focused: true };
       }
       case "bottom": {
         const w = find();

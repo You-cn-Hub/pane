@@ -6,8 +6,8 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "test": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js && node test/launcher.test.js && node test/url.test.js && node test/winmgr.test.js && node test/lnk.test.js && node test/launcherdetect.test.js",
-    "test:all": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js && node test/launcher.test.js && node test/url.test.js && node test/winmgr.test.js && node test/lnk.test.js && node test/launcherdetect.test.js",
+    "test": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js && node test/launcher.test.js && node test/url.test.js && node test/winmgr.test.js && node test/lnk.test.js && node test/launcherdetect.test.js && node test/minimize.test.js",
+    "test:all": "node test/paths.test.js && node test/safefs.test.js && node test/win32.test.js && node test/logger.test.js && node test/naming.test.js && node test/launcher.test.js && node test/url.test.js && node test/winmgr.test.js && node test/lnk.test.js && node test/launcherdetect.test.js && node test/minimize.test.js",
     "check": "node --check src/main.js && node --check src/renderer/app.js",
     "dist": "electron-builder --win --x64",
     "release": "node scripts/release.js",
