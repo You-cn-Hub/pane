@@ -306,7 +306,24 @@ html, body {
 .switch:hover { border-color: rgba(255, 255, 255, 0.28); }
 .switch.on { background: var(--ok); border-color: transparent; }
 .switch.on::after { transform: translateX(16px); background: var(--white); }
-.switch.busy { opacity: .5; }
+.switch.busy { cursor: progress; }
+/* 进行中：胶囊上跑一条流动光带，明确「在办了」 */
+.switch.busy::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,.55) 50%, transparent 100%);
+  background-size: 200% 100%;
+  animation: swBusy 1s linear infinite;
+  pointer-events: none;
+}
+@keyframes swBusy {
+  from { background-position: 200% 0; }
+  to { background-position: -200% 0; }
+}
+/* 启动中的条目：左侧亮一条细边，和「已在运行」区分开 */
+.item.pending { border-left: 2px solid var(--info); }
 
 /* 底部状态 */
 .foot {

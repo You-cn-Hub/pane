@@ -92,15 +92,49 @@ function render(list) {
     });
 
     // 点胶囊：启动 / 结束
+    // 关键：点击瞬间就切换视觉状态，不要等后端返回。
+    // 程序启动/关闭动辄一两秒，等结果再变会让人以为没点上。
+    // 只有真正失败时才回退。
     const sw = row.querySelector(".switch");
     sw.addEventListener("click", async (e) => {
       e.stopPropagation();
       if (sw.classList.contains("busy")) return;
+
+      const wasRunning = sw.classList.contains("on");
+      const wantRunning = !wasRunning;
+
+      // 1) 立刻反馈：切状态 + 加 loading 动效
+      sw.classList.toggle("on", wantRunning);
+      sw.setAttribute("aria-checked", String(wantRunning));
       sw.classList.add("busy");
-      tip(p.running ? `正在结束 ${p.name}…` : `正在启动 ${p.name}…`);
-      const r = p.running ? await window.wb.quit(p.id) : await window.wb.launch(p.id);
-      tip(r.msg || r.error || "", !r.ok);
-      setTimeout(refresh, 1800);
+      row.classList.toggle("pending", wantRunning);
+      const st = row.querySelector(".st");
+      const prevStatus = st ? st.textContent : "";
+      if (st) st.textContent = wantRunning ? "启动中" : "关闭中";
+      tip(wantRunning ? `正在启动 ${p.name}…` : `正在结束 ${p.name}…`);
+
+      let r;
+      try {
+        r = wantRunning ? await window.wb.launch(p.id) : await window.wb.quit(p.id);
+      } catch (err) {
+        r = { ok: false, error: (err && err.message) || "操作失败" };
+      }
+
+      sw.classList.remove("busy");
+      row.classList.remove("pending");
+
+      if (!r || !r.ok) {
+        // 2) 失败才回退到原状态
+        sw.classList.toggle("on", wasRunning);
+        sw.setAttribute("aria-checked", String(wasRunning));
+        if (st) st.textContent = prevStatus;
+        tip((r && (r.error || r.msg)) || "操作失败", true);
+        return;
+      }
+
+      tip((r && r.msg) || (wantRunning ? `已启动 ${p.name}` : `已关闭 ${p.name}`));
+      // 3) 稍后跟一次真实状态，兜底外部变化（用户手动关了之类）
+      setTimeout(refresh, 1200);
     });
 
     // 按住上下拖 = 换位置。横向基本不动，所以只看 Y。
