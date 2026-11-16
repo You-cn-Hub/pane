@@ -56,6 +56,9 @@ function render(list) {
     row.addEventListener("click", async (e) => {
       if (e.target.closest(".switch")) return;
       if (justDragged()) return;        // 刚拖完，这一下不算点击
+      // 点行只做「收 / 放」，是最频繁的操作，不能每次都整表重刷。
+      // 整表重刷会重算所有条目的图标和进程状态，条目一多就卡。
+      // 这里只改这一行的样式，其它行保持不动。
       const r = await window.wb.activate(p.id);
       if (r.silent) {
         // 没在运行：点这一行不作声，启动请用胶囊开关
@@ -63,17 +66,28 @@ function render(list) {
       }
       if (!r.ok) {
         tip(r.error || "操作失败", true);
-      } else if (r.mode === "minimize") {
-        activeId = null;
-        tip(`已最小化 ${p.name}`);
-      } else if (r.mode === "hide") {
-        activeId = null;
-        tip(`已收起 ${p.name}`);
-      } else {
-        activeId = p.id;
-        tip(`已置顶 ${p.name}`);
+        return;
       }
-      setTimeout(refresh, 1200);
+
+      const isDown = r.mode === "minimize" || r.mode === "hide";
+      activeId = isDown ? null : p.id;
+      row.classList.toggle("active", !isDown);
+
+      // 只改本行，不动整表
+      const rowSt = row.querySelector(".st");
+      if (rowSt) rowSt.textContent = isDown ? (r.mode === "hide" ? "已收起" : "已最小化") : "当前";
+
+      if (r.mode === "minimize") tip(`已最小化 ${p.name}`);
+      else if (r.mode === "hide") tip(`已收起 ${p.name}`);
+      else tip(`已置顶 ${p.name}`);
+
+      // 让其它行的高亮跟着让位（不重刷数据，只改 class）
+      listEl.querySelectorAll(".item.active").forEach((el) => {
+        if (el !== row) el.classList.remove("active");
+      });
+
+      // 很晚才做一次真实同步，兜住外部变化，不影响手感
+      setTimeout(refresh, 2500);
     });
 
     // 右键：弹出菜单

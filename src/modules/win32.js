@@ -113,32 +113,49 @@ function pidOf(hWnd) {
   return buf.readUInt32LE(0);
 }
 
+// pid -> exe 路径缓存。
+// OpenProcess + QueryFullProcessImageNameW 是枚举里最贵的一步，
+// 一次全量枚举 410 个窗口就要查 410 次。同一个 pid 在短时间内结果不会变，直接复用。
+const exeCache = new Map();
+const EXE_CACHE_TTL = 3000; // 3 秒
+
 function exeOfPid(pid) {
+  const now = Date.now();
+  const hit = exeCache.get(pid);
+  if (hit && now - hit.t < EXE_CACHE_TTL) return hit.v;
+
   const PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
+  let value = "";
   let h = 0n;
   try {
     h = fns.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid);
   } catch {
-    return "";
+    h = 0n;
   }
-  if (!h) return "";
-  try {
-    const buf = Buffer.alloc(1024 * 2);
-    const sizeBuf = Buffer.alloc(4);
-    sizeBuf.writeUInt32LE(1024, 0);
-    const ok = fns.QueryFullProcessImageNameW(h, 0, buf, sizeBuf);
-    if (!ok) return "";
-    const n = sizeBuf.readUInt32LE(0);
-    return buf.toString("utf16le", 0, n * 2);
-  } catch {
-    return "";
-  } finally {
+  if (h) {
     try {
-      fns.CloseHandle(h);
-    } catch {}
+      const buf = Buffer.alloc(1024 * 2);
+      const sizeBuf = Buffer.alloc(4);
+      sizeBuf.writeUInt32LE(1024, 0);
+      if (fns.QueryFullProcessImageNameW(h, 0, buf, sizeBuf)) {
+        const n = sizeBuf.readUInt32LE(0);
+        value = buf.toString("utf16le", 0, n * 2);
+      }
+    } catch {
+      value = "";
+    } finally {
+      try {
+        fns.CloseHandle(h);
+      } catch {}
+    }
   }
-}
 
+  // 空结果也缓存：查不到的 pid 没必要每次都重试
+  exeCache.set(pid, { v: value, t: now });
+  // 缓存不能无限长，超过 500 条就清一次
+  if (exeCache.size > 500) exeCache.clear();
+  return value;
+}
 function rectOf(hWnd) {
   const buf = Buffer.alloc(16);
   try {
@@ -199,37 +216,49 @@ function listWindows(includeHidden = false) {
 }
 
 /** 按条件找窗口，多个命中取第一个可见且有标题的 */
+/**
+ * 按条件找窗口。
+ *
+ * 性能要点：本机有 400+ 个窗口，但可见的只有十几个。
+ * 每次全量枚举要给每个窗口查进程路径（OpenProcess），一次 16ms 左右。
+ * 所以分两阶段：先只枚举可见窗口（0.6ms），找不到再扩大到全部。
+ */
 function findWindow({ process: procName, klass, title } = {}) {
-  const all = listWindows(true);
   const wantProc = (procName || "").toLowerCase();
   const wantTitle = title ? new RegExp(title, "i") : null;
-  const hits = all.filter((w) => {
-    if (wantProc) {
-      const base = (w.exe || "").split("\\").pop().toLowerCase();
-      if (base !== wantProc && base !== wantProc + ".exe") return false;
-    }
-    if (klass && w.cls !== klass) return false;
-    if (wantTitle && !wantTitle.test(w.title)) return false;
-    return true;
-  });
-  if (!hits.length) return null;
 
-  // 排序规则（Electron 应用尤其重要）：
-  //   1. 有标题的优先 —— 无标题的多是 Electron 的辅助窗口（widget host、IME、托盘），
-  //      点它们唤不出主界面
-  //   2. 同是有标题时，可见的优先
-  //   3. 同分时优先非 IME / 非系统类
-  const score = (w) => {
-    let s = 0;
-    if (w.title) s += 100;
-    if (w.visible) s += 10;
-    if (/^(IME|MSCTFIME UI|Base_PowerMessageWindow|Electron_NotifyIconHostWindow|TaskbarWidgetThemeMonitor)/i.test(w.cls || "")) s -= 50;
-    return s;
+  const match = (list) =>
+    list.filter((w) => {
+      if (wantProc) {
+        const base = (w.exe || "").split("\\").pop().toLowerCase();
+        if (base !== wantProc && base !== wantProc + ".exe") return false;
+      }
+      if (klass && w.cls !== klass) return false;
+      if (wantTitle && !wantTitle.test(w.title)) return false;
+      return true;
+    });
+
+  const pick = (hits) => {
+    if (!hits.length) return null;
+    const score = (w) => {
+      let s = 0;
+      if (w.title) s += 100;
+      if (w.visible) s += 10;
+      if (/^(IME|MSCTFIME UI|Base_PowerMessageWindow|Electron_NotifyIconHostWindow|TaskbarWidgetThemeMonitor)/i.test(w.cls || "")) s -= 50;
+      return s;
+    };
+    hits.sort((a, b) => score(b) - score(a));
+    return hits[0];
   };
-  hits.sort((a, b) => score(b) - score(a));
-  return hits[0];
-}
 
+  // 第一阶段：只看可见窗口
+  const quick = pick(match(listWindows(false)));
+  if (quick && quick.title) return quick;
+
+  // 第二阶段：可见窗口里没找到「有标题的」，再全量查一次
+  const full = pick(match(listWindows(true)));
+  return full || quick;
+}
 // ---------- 动作 ----------
 
 function focus(hWnd) {
