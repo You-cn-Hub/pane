@@ -567,6 +567,52 @@ function listProcessNames() {
   }
 }
 
+/**
+ * 优雅关闭：给主窗口发 WM_CLOSE，让程序自己走正常退出流程。
+ *
+ * 为什么重要：taskkill /F 是强制终止，程序来不及保存状态。
+ * Obsidian / VS Code 这类会把窗口尺寸、布局写在退出时，
+ * 直接强杀会导致下次启动「记不住上次的大小」。
+ *
+ * @returns {{ok:boolean, closed:number}} closed 是成功发出关闭消息的窗口数
+ */
+function closeByProcess(procName) {
+  if (!load() || !procName) return { ok: false, closed: 0 };
+  try {
+    const want = String(procName).toLowerCase();
+    const targets = listWindows(true).filter((x) => {
+      const base = (x.exe || "").split("\\").pop().toLowerCase();
+      if (base !== want && base !== want + ".exe") return false;
+      // 只给有标题的主窗口发，辅助窗口发了没用
+      if (!x.title) return false;
+      // 托盘宿主 / IME 之类不要碰
+      if (/^(IME|MSCTFIME UI|Electron_NotifyIconHostWindow|Base_PowerMessageWindow)/i.test(x.cls || "")) return false;
+      return true;
+    });
+    let n = 0;
+    for (const w of targets) {
+      try {
+        fns.PostMessageW(w.hWnd, WM_CLOSE, 0, 0);
+        n++;
+      } catch {}
+    }
+    return { ok: n > 0, closed: n };
+  } catch {
+    return { ok: false, closed: 0 };
+  }
+}
+
+/** 某个进程名当前还有多少个实例在跑 */
+function countProcess(procName) {
+  if (!load() || !procName) return 0;
+  try {
+    const want = String(procName).toLowerCase();
+    return listProcessNames().filter((n) => n.toLowerCase() === want || n.toLowerCase() === want + ".exe").length;
+  } catch {
+    return 0;
+  }
+}
+
 function hasTrayIcon(procName) {
   if (!load() || !procName) return false;
   try {
@@ -607,5 +653,7 @@ module.exports = {
   isOpen,
   hasTrayIcon,
   listProcessNames,
+  closeByProcess,
+  countProcess,
   showCmdOf,
 };

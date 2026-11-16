@@ -154,6 +154,32 @@ function createLauncher(deps) {
     }
 
     if (!p.find) return { ok: false, error: "该插件不可关闭" };
+
+    // 先优雅关闭：发 WM_CLOSE 让程序自己退出。
+    // 直接 taskkill /F 会强杀进程，程序来不及保存窗口尺寸和布局，
+    // 下次启动就回到默认小窗口（Obsidian 就是这个问题）。
+    const native = (() => {
+      try {
+        return require("./win32");
+      } catch {
+        return null;
+      }
+    })();
+
+    if (native && native.isAvailable()) {
+      const cr = native.closeByProcess(p.find.process);
+      if (cr.ok) {
+        // 最多等 6 秒让程序自己退干净
+        for (let i = 0; i < 24; i++) {
+          await sleep(250);
+          if (native.countProcess(p.find.process) === 0) {
+            return { ok: true, msg: `已关闭 ${p.name}` };
+          }
+        }
+      }
+      // 优雅关闭没成功（程序无响应 / 只想收托盘），才强制结束
+    }
+
     const kr = await runWinMgr(["kill", "--hidden", "--process", p.find.process]);
     return { ok: kr.ok, msg: kr.ok ? `已关闭 ${p.name}` : "关闭失败" };
   }
