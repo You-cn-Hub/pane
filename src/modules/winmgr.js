@@ -93,6 +93,25 @@ function createWinMgr(deps) {
       case "toggle": {
         const w = find();
         if (!w) return { ok: false, error: "not_found" };
+        // Electron 类应用有多个同 pid 的窗口，findWindow 可能挑中无标题的辅助窗口，
+        // 那种窗口聚焦了也不会把主界面带出来。这里再筛一次，优先有标题的。
+        if (!w.title && wantProc) {
+          const sameProc = native
+            .listWindows(true)
+            .filter((x) => (x.exe || "").split("\\").pop().toLowerCase() === String(wantProc).toLowerCase())
+            .filter((x) => x.title);
+          if (sameProc.length) {
+            const better = sameProc.find((x) => x.visible) || sameProc[0];
+            return (() => {
+              const st2 = native.stateOf(better.hWnd);
+              if (!st2.ok) return st2;
+              if (!st2.foreground) { native.focus(better.hWnd); return { ok: true, action: "focus", focused: true }; }
+              if (st2.minimized) { native.showWin(better.hWnd); return { ok: true, action: "restore", focused: true }; }
+              native.sendBottom(better.hWnd);
+              return { ok: true, action: "bottom", focused: false };
+            })();
+          }
+        }
         const st = native.stateOf(w.hWnd);
         if (!st.ok) return st;
         // 三态：没在前台 → 唤到前台；在前台但最小化 → 还原；在前台 → 沉底

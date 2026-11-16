@@ -28,6 +28,7 @@ const { createUpdater } = require("./modules/updater");
 const { createPluginService } = require("./modules/plugins");
 const { createIconService } = require("./modules/icons");
 const { createLauncher, sleep } = require("./modules/launcher");
+const { looksLikeLauncher, pickRealProcess } = require("./modules/launcherdetect");
 const { clearProxyEnv, disableProxy } = require("./modules/proxy");
 
 // ---------- 路径 ----------
@@ -1099,6 +1100,42 @@ async function addFile(filePath) {
   };
 }
 
+/**
+ * 启动器校正：程序启动后，如果配置里记的是启动器进程名，
+ * 等一会儿看真实进程出现没有，出现了就写回配置。
+ *
+ * 触发条件：find.process 名字像启动器（launcher/bootstrap 之类）。
+ * 普通程序不会走这条路，不影响启动速度。
+ */
+async function correctLauncherProcess(p) {
+  try {
+    const want = (p.find && p.find.process) || "";
+    if (!looksLikeLauncher(want)) return;
+
+    // 等 1.5 秒让主程序起来，然后最多再试 6 次
+    for (let i = 0; i < 7; i++) {
+      await sleep(i === 0 ? 1500 : 500);
+      const r = await runWinMgr(["procs"]);
+      const procs = (r && r.procs) || [];
+      const real = pickRealProcess(procs, want);
+      if (!real || real.toLowerCase() === want.toLowerCase()) continue;
+
+      // 找到了真正在跑的进程，写回配置
+      const file = path.join(PLUGIN_DIR, `${p.id}.json`);
+      const cfg = JSON.parse(fs.readFileSync(file, "utf-8"));
+      const oldProcess = cfg.find.process;
+      cfg.find = Object.assign({}, cfg.find, { process: real });
+      writeFileSafe(file, JSON.stringify(cfg, null, 2));
+      trace(`[launcher] ${p.name} 进程名校正: ${oldProcess} -> ${real}`);
+      reloadPlugins();
+      if (win) win.webContents.send("state:changed", { id: p.id, msg: `已识别到 ${real}` });
+      return;
+    }
+  } catch (e) {
+    trace("[launcher] 校正失败: " + e.message);
+  }
+}
+
 async function registerProgram(exe) {
   const name = path.basename(exe).replace(/\.(exe|bat|cmd)$/i, "");
   const id = slugify(name);
@@ -1230,6 +1267,11 @@ ipcMain.handle("plugin:activate", async (_e, id) => {
 ipcMain.handle("plugin:launch", async (_e, id) => {
   const r = await launchOnly(id);
   if (win) win.webContents.send("state:changed", { id, msg: r.msg || r.error || "" });
+  // 启动器类程序：后台校正进程名，不阻塞返回
+  if (r.ok) {
+    const pl = pluginService.get(id);
+    if (pl) correctLauncherProcess(pl).catch(() => {});
+  }
   return r;
 });
 

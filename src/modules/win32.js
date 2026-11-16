@@ -213,7 +213,20 @@ function findWindow({ process: procName, klass, title } = {}) {
     return true;
   });
   if (!hits.length) return null;
-  hits.sort((a, b) => Number(b.visible) - Number(a.visible) || (b.title ? 1 : 0) - (a.title ? 1 : 0));
+
+  // 排序规则（Electron 应用尤其重要）：
+  //   1. 有标题的优先 —— 无标题的多是 Electron 的辅助窗口（widget host、IME、托盘），
+  //      点它们唤不出主界面
+  //   2. 同是有标题时，可见的优先
+  //   3. 同分时优先非 IME / 非系统类
+  const score = (w) => {
+    let s = 0;
+    if (w.title) s += 100;
+    if (w.visible) s += 10;
+    if (/^(IME|MSCTFIME UI|Base_PowerMessageWindow|Electron_NotifyIconHostWindow|TaskbarWidgetThemeMonitor)/i.test(w.cls || "")) s -= 50;
+    return s;
+  };
+  hits.sort((a, b) => score(b) - score(a));
   return hits[0];
 }
 
