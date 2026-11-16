@@ -518,6 +518,55 @@ function isOpen(hWnd) {
  * 用途：最小化时决定「真的最小化到任务栏」还是「收进托盘」。
  * 软件没提供托盘选项的话，硬藏起来用户就找不回来了。
  */
+/**
+ * 枚举系统里真实存在的进程名列表。
+ *
+ * 为什么不复用 listWindows：那个只反映「有窗口的进程」。
+ * 程序收进托盘后窗口隐藏，listWindows 就查不到了，
+ * 会被误判成「没在运行」——汽水音乐就是这个坑。
+ *
+ * 这里用 Toolhelp32 快照，直接读进程表，与窗口无关。
+ */
+function listProcessNames() {
+  if (!load()) return [];
+  const TH32CS_SNAPPROCESS = 0x00000002;
+  try {
+    const CreateToolhelp32Snapshot = kernel32.func("intptr_t CreateToolhelp32Snapshot(uint32 flags, uint32 pid)");
+    const Process32FirstW = kernel32.func("bool Process32FirstW(intptr_t snap, _Inout_ uint8_t* pe)");
+    const Process32NextW = kernel32.func("bool Process32NextW(intptr_t snap, _Inout_ uint8_t* pe)");
+
+    const snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+    if (!snap || String(snap) === "-1") return [];
+
+    // PROCESSENTRY32W 在 x64 上实际是 568 字节：
+    //   dwSize(4) cntUsage(4) th32ProcessID(4) + 4 字节对齐填充
+    //   th32DefaultHeapID(8) th32ModuleID(4) cntThreads(4)
+    //   th32ParentProcessID(4) pcPriClassBase(4) dwFlags(4) + 4 字节对齐
+    //   szExeFile[260] WCHAR(520)
+    // 结构体大小给错，Process32FirstW 会直接返回 false。
+    const SIZE = 568;
+    const NAME_OFFSET = 44;
+    const pe = Buffer.alloc(SIZE);
+    pe.writeUInt32LE(SIZE, 0);
+
+    const names = new Set();
+    let ok = Process32FirstW(snap, pe);
+    let guard = 0;
+    while (ok && guard++ < 20000) {
+      const nameBuf = pe.slice(NAME_OFFSET, NAME_OFFSET + 260 * 2);
+      const s = nameBuf.toString("utf16le").replace(/\u0000.*$/, "");
+      if (s) names.add(s);
+      ok = Process32NextW(snap, pe);
+    }
+    try {
+      fns.CloseHandle(snap);
+    } catch {}
+    return [...names];
+  } catch {
+    return [];
+  }
+}
+
 function hasTrayIcon(procName) {
   if (!load() || !procName) return false;
   try {
@@ -557,5 +606,6 @@ module.exports = {
   restoreWin,
   isOpen,
   hasTrayIcon,
+  listProcessNames,
   showCmdOf,
 };

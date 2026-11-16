@@ -282,7 +282,31 @@ async function activate(id, opts = {}) {
 }
 
 // 只启动进程，不切换面板
+/**
+ * 当前在运行的进程名集合（小写）。
+ *
+ * 不能用 runWinMgr(["procs"])：那个只统计「有可见窗口的进程」，
+ * 程序收进托盘后窗口隐藏，就被误判成没在运行。
+ * 走 Toolhelp32 直接读进程表，与窗口无关。
+ */
+// 进程列表缓存：界面每 12 秒刷一次，点击也会触发刷新，
+// 800ms 内重复调用直接复用，避免重复枚举 100+ 进程。
+let _procCache = null;
+let _procCacheAt = 0;
+const PROC_CACHE_MS = 800;
+
 async function runningProcs() {
+  const now = Date.now();
+  if (_procCache && now - _procCacheAt < PROC_CACHE_MS) return _procCache;
+  try {
+    const names = win32Native.listProcessNames();
+    if (names.length) {
+      _procCache = new Set(names.map((x) => x.toLowerCase()));
+      _procCacheAt = now;
+      return _procCache;
+    }
+  } catch {}
+  // 原生不可用时退回窗口枚举
   const r = await runWinMgr(["procs"]);
   return new Set(r.ok ? r.procs.map((x) => x.toLowerCase()) : []);
 }
@@ -1271,6 +1295,7 @@ ipcMain.handle("plugin:activate", async (_e, id) => {
 });
 
 ipcMain.handle("plugin:launch", async (_e, id) => {
+  _procCache = null; // 启动后立刻失效，下一次查询拿真实结果
   const r = await launchOnly(id);
   if (win) win.webContents.send("state:changed", { id, msg: r.msg || r.error || "" });
   // 启动器类程序：后台校正进程名，不阻塞返回
@@ -1282,6 +1307,7 @@ ipcMain.handle("plugin:launch", async (_e, id) => {
 });
 
 ipcMain.handle("plugin:quit", async (_e, id) => {
+  _procCache = null; // 关闭后立刻失效
   const r = await quitApp(id);
   if (win) win.webContents.send("state:changed", { id, msg: r.msg || r.error || "" });
   return r;
