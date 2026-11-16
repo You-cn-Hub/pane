@@ -424,6 +424,18 @@ function minimizeWin(hWnd) {
     const buf = Buffer.alloc(44);
     buf.writeUInt32LE(44, 0);
     if (!fns.GetWindowPlacement(hWnd, buf)) return { ok: false, error: "get_placement_failed" };
+
+    // 最小化前把当前实际矩形写进 rcNormalPosition，
+    // 这样以后无论走哪条还原路径，恢复的都是「用户最后用的尺寸」，
+    // 而不是某个更早过期的大小。
+    const r = rectOf(hWnd);
+    if (r && r.w > 0 && r.h > 0) {
+      buf.writeInt32LE(r.left, 28);
+      buf.writeInt32LE(r.top, 32);
+      buf.writeInt32LE(r.right, 36);
+      buf.writeInt32LE(r.bottom, 40);
+    }
+
     buf.writeUInt32LE(SW_SHOWMINIMIZED, 8);
     fns.SetWindowPlacement(hWnd, buf);
     // 兜底：有些程序不认 SetWindowPlacement，再补一次 ShowWindow
@@ -437,17 +449,45 @@ function minimizeWin(hWnd) {
   }
 }
 
-/** 从最小化还原到正常大小 */
+/**
+ * 从最小化还原。
+ *
+ * 关键：不能把 showCmd 硬写成 SW_SHOWNORMAL。
+ * WINDOWPLACEMENT 里有两套信息：当前状态(showCmd) 和 正常位置矩形(rcNormalPosition)。
+ * 直接 SetWindowPlacement(SW_SHOWNORMAL) 会让窗口按 rcNormalPosition 重新摆放，
+ * 而那份矩形可能早就过期（用户后来拖动 / 改过大小），于是「第二次唤起尺寸变了」。
+ *
+ * 正确做法：优先只用 ShowWindow(SW_RESTORE)，让系统自己按最小化前的状态还原，
+ * 不动位置和尺寸。只有 ShowWindow 无效时才退回 SetWindowPlacement，
+ * 并且把 rcNormalPosition 换成当前实际矩形，避免用过期值。
+ */
 function restoreWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
+    // 先记住最小化前的实际矩形（GetWindowRect 在最小化时仍是最后一次正常位置）
+    const before = rectOf(hWnd);
+
+    fns.ShowWindow(hWnd, SW_RESTORE);
+
+    // 检查是否真的还原了
+    if (showCmdOf(hWnd) !== SW_SHOWMINIMIZED) {
+      return { ok: true, restored: true };
+    }
+
+    // 兜底：ShowWindow 没生效，手动改 placement，但保留当前尺寸
     const buf = Buffer.alloc(44);
     buf.writeUInt32LE(44, 0);
     if (!fns.GetWindowPlacement(hWnd, buf)) {
-      fns.ShowWindow(hWnd, SW_RESTORE);
-      return { ok: true, restored: true };
+      return { ok: false, error: "get_placement_failed" };
     }
     buf.writeUInt32LE(SW_SHOWNORMAL, 8);
+    // 用最小化前记下的矩形覆盖 rcNormalPosition（偏移 28，4 个 int32）
+    if (before) {
+      buf.writeInt32LE(before.left, 28);
+      buf.writeInt32LE(before.top, 32);
+      buf.writeInt32LE(before.right, 36);
+      buf.writeInt32LE(before.bottom, 40);
+    }
     fns.SetWindowPlacement(hWnd, buf);
     fns.ShowWindow(hWnd, SW_RESTORE);
     return { ok: true, restored: true };
@@ -463,6 +503,30 @@ function isOpen(hWnd) {
     const visible = !!fns.IsWindowVisible(hWnd);
     const cmd = showCmdOf(hWnd);
     return visible && cmd !== SW_SHOWMINIMIZED;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 这个程序的窗口群体里有没有托盘图标宿主窗口。
+ *
+ * 就是判断「这个软件本身有没有启用最小化到托盘」：
+ *   Electron 应用在托盘放图标时，会创建一个 Electron_NotifyIconHostWindow；
+ *   没有托盘图标的（比如 Obsidian 默认配置），就没有这个窗口。
+ *
+ * 用途：最小化时决定「真的最小化到任务栏」还是「收进托盘」。
+ * 软件没提供托盘选项的话，硬藏起来用户就找不回来了。
+ */
+function hasTrayIcon(procName) {
+  if (!load() || !procName) return false;
+  try {
+    const want = String(procName).toLowerCase();
+    return listWindows(true).some((w) => {
+      const base = (w.exe || "").split("\\").pop().toLowerCase();
+      if (base !== want && base !== want + ".exe") return false;
+      return /NotifyIconHost|SystemTray|TrayWnd|TrayIcon/i.test(w.cls || "");
+    });
   } catch {
     return false;
   }
@@ -492,5 +556,6 @@ module.exports = {
   minimizeWin,
   restoreWin,
   isOpen,
+  hasTrayIcon,
   showCmdOf,
 };

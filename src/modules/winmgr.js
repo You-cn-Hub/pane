@@ -119,13 +119,21 @@ function createWinMgr(deps) {
         const opened = native.isOpen(w.hWnd);
 
         if (opened) {
+          // 用户要求：最小化 = 直接收进托盘。
+          // 但前提是这个软件自己有托盘图标 —— 否则藏起来就找不回来了。
+          // 判断依据：程序窗口里有没有 NotifyIconHost 这类托盘宿主窗口。
+          const trayCapable = wantProc ? native.hasTrayIcon(wantProc) : false;
+          if (trayCapable) {
+            native.hideWin(w.hWnd);
+            return { ok: true, action: "hide", focused: false, tray: true };
+          }
+          // 没有托盘：老老实实最小化到任务栏
           const mr = native.minimizeWin(w.hWnd);
           if (!mr.ok) return mr;
-          // 有些无边框 / 全屏覆盖层不接受最小化，会立刻弹回来，
-          // 这时改用隐藏，效果等同于收进托盘
           if (!native.isOpen(w.hWnd)) {
             return { ok: true, action: "minimize", focused: false };
           }
+          // 连最小化都不接受的（无边框覆盖层），最后才退到隐藏
           native.hideWin(w.hWnd);
           return { ok: true, action: "hide", focused: false };
         }
