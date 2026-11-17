@@ -525,7 +525,9 @@ async function startRecording() {
 async function stopRecording() {
   recording = false;
   hkBtn.classList.remove("recording");
-  await window.wb.endCapture();
+  // 取消录制时也要把密钥重新挂上（录制期间是注销状态）
+  const end = await window.wb.endCapture();
+  if (end && end.error) setHint(end.error, true);
   paintHotkey();
 }
 
@@ -568,12 +570,16 @@ window.addEventListener("keydown", async (e) => {
   const r = await window.wb.setHotkey(acc);
   recording = false;
   hkBtn.classList.remove("recording");
-  await window.wb.endCapture();
+  // 注册在 endCapture 里真正生效（录制期间全局快捷键是注销状态），
+  // 所以要拿它的返回判断到底有没有挂上。
+  const end = await window.wb.endCapture();
 
-  if (r.ok) {
-    setHint(`已设为 ${prettyAccel(acc)}。按它可以把悬浮台唤出 / 收起。`);
-  } else {
+  if (!r.ok) {
     setHint(r.error || "设置失败", true);
+  } else if (end && end.error) {
+    setHint(end.error, true);
+  } else {
+    setHint(`已设为 ${prettyAccel(acc)}。按它可以把悬浮台唤出 / 收起。`);
   }
   paintHotkey();
 });

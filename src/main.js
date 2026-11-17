@@ -675,6 +675,9 @@ function applyForeground(r) {
 const SETTINGS_FILE = path.join(DATA_DIR, "settings.json");
 let settings = settingsService.load();
 let barHotkey = null;   // 已注册的唤出快捷键
+// 正在录制快捷键。录制期间必须注销所有全局快捷键，
+// 否则用户按下当前唤出键时会被系统级钩子先截走，窗口直接收起来。
+let captureActive = false;
 
 function saveSettings(patch) {
   const r = settingsService.save(patch || {});
@@ -692,6 +695,9 @@ function applyBarHotkey() {
   }
   const acc = (settings.toggleHotkey || "").trim();
   if (!acc) return { ok: true, hotkey: "" };
+  // 录制中先不注册：等录完（endCapture）再挂上去，
+  // 不然刚录的键立刻生效，用户再按一次就又把窗口收起来了。
+  if (captureActive) return { ok: true, hotkey: acc, deferred: true };
   let ok = false;
   try {
     ok = globalShortcut.register(acc, () => toggleWin());
@@ -1677,6 +1683,22 @@ ipcMain.handle("settings:setHotkey", async (_e, acc) => {
 
 // 录制快捷键时临时解除"永不激活"，否则收不到键盘
 ipcMain.handle("settings:beginCapture", async () => {
+  // 1) 先注销所有全局快捷键。
+  //    不这么做的话，用户按下的若是当前唤出键，会被系统级钩子先吃掉，
+  //    窗口当场收起来——这正是「设置快捷键时窗口最小化」的原因。
+  captureActive = true;
+  trace("[capture] begin, 已注销全局快捷键");
+  try {
+    if (barHotkey) {
+      globalShortcut.unregister(barHotkey);
+      barHotkey = null;
+    }
+  } catch {}
+  try {
+    globalShortcut.unregisterAll();
+  } catch {}
+
+  // 2) 解除「永不激活」，否则收不到键盘输入
   const name = path.basename(app.getPath("exe"));
   await runWinMgr(["activate", "--process", name]);
   if (win) {
@@ -1690,7 +1712,15 @@ ipcMain.handle("settings:endCapture", async () => {
   const name = path.basename(app.getPath("exe"));
   await runWinMgr(["noactivate", "--process", name]);
   if (win) win.blur();
-  return { ok: true };
+
+  // 录制结束，把快捷键重新挂上（包括刚录好的那个）。
+  // 顺序不能反：registerHotkeys() 开头会 unregisterAll()，
+  // 先调它再注册唤出键，否则刚挂上的唤出键会被冲掉。
+  captureActive = false;
+  registerHotkeys();
+  const r = applyBarHotkey();
+  trace("[capture] end, 重新注册: " + (r.hotkey || "(无)") + (r.error ? " 失败:" + r.error : ""));
+  return { ok: true, hotkey: r.hotkey || "", error: r.error || "" };
 });
 
 ipcMain.handle("app:quit", () => {
