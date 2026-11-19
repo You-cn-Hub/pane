@@ -1,5 +1,5 @@
 /**
- * 贴边自动收起 —— 窗格贴住屏幕某条边后，鼠标离开一会儿就滑出屏幕，
+ * 贴边自动收起 —— Pane 贴住屏幕某条边后，鼠标离开一会儿就滑出屏幕，
  * 只在边上留一条 6px 的把手；鼠标碰到把手，它滑回原位。
  *
  * 为什么在主进程轮询光标，而不是靠界面上的 mouseenter / mouseleave：
@@ -219,7 +219,7 @@ function createEdgeHide(deps = {}) {
     const c = cursor();
     if (!c || !c.ok) return;
 
-    // 鼠标还在窗格里 —— 用户在用它，别收
+    // 鼠标还在 Pane 里 —— 用户在用它，别收
     if (inRect(c, rect, TOL)) {
       idleAt = -1;
       return;

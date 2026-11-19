@@ -104,7 +104,7 @@ let fgDaemon = null;
 let fgBuf = "";
 let edgeHide = null;        // 贴边自动收起（createWindow 之后才建）
 let edgeHideOn = true;
-let posLocked = false;      // 锁定窗格位置：锁定后拖不动
+let posLocked = false;      // 锁定 Pane 的位置：锁定后拖不动
 
 const iconCache = new Map();
 
@@ -654,7 +654,7 @@ function setEdgeHide(on) {
   refreshTray();
 }
 
-/** 锁定 / 解锁窗格位置 */
+/** 锁定 / 解锁 Pane 的位置 */
 function setPosLocked(on) {
   posLocked = !!on;
   saveSettings({ posLocked });

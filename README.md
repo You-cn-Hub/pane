@@ -1,6 +1,6 @@
-# 窗格 · Pane
+# Pane
 
-> 把常用的本地程序收进一条贴边窗格：一点开关、一点唤到前台、拖动排序、收进托盘。
+> 把常用的本地程序收进一条贴边的浮条：一点开关、一点唤到前台、拖动排序、收进托盘。
 
 ![version](https://img.shields.io/badge/version-1.1.0-4ecdc4)
 ![platform](https://img.shields.io/badge/platform-Windows%20x64-0078d4)
@@ -12,7 +12,7 @@
 
 桌面上常年开着一堆程序——聊天工具、笔记、代码编辑器、本地服务、脚本面板。它们散落在任务栏和桌面图标之间，每次切换都要找一遍。
 
-**窗格**把这些程序收成一条窄窄的竖向条，贴在屏幕边缘：
+**Pane** 把这些程序收成一条窄窄的竖向条，贴在屏幕边缘：
 
 | 能力 | 说明 |
 | --- | --- |
@@ -46,7 +46,7 @@
 从 [Releases](https://github.com/You-cn-Hub/pane/releases) 下载 `Pane-Setup-x.x.x.exe`，双击安装。
 
 - 可选安装目录（默认 `%LOCALAPPDATA%\Programs\Pane`）
-- 自动创建桌面与开始菜单快捷方式「窗格」
+- 自动创建桌面与开始菜单快捷方式「Pane」
 - 装完自动启动
 
 ### 方式二：绿色版
