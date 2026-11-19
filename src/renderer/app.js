@@ -656,13 +656,13 @@ window.addEventListener("keydown", async (e) => {
   } else if (end && end.error) {
     setHint(end.error, true);
   } else {
-    setHint(`已设为 ${prettyAccel(acc)}。按它可以把悬浮台唤出 / 收起。`);
+    setHint(`已设为 ${prettyAccel(acc)}。按它可以把 Pane 唤出 / 收起。`);
   }
   paintHotkey();
 });
 
 // ---------- 添加文件 ----------
-// 把文件直接拖进悬浮台
+// 把文件直接拖进 Pane
 window.addEventListener("dragover", (e) => {
   e.preventDefault();
   e.dataTransfer.dropEffect = "copy";

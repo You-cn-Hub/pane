@@ -68,7 +68,7 @@ const settingsService = createSettings({ settingsFile: PATHS.SETTINGS_FILE });
 // 本程序只连本机，代理只会添乱 —— 在 app ready 之前就清掉
 clearProxyEnv();
 
-// ---------- 悬浮台尺寸 ----------
+// ---------- 窗口尺寸 ----------
 // 悬浮窗置顶层级。
 // 不能用 "floating"：它层级偏低，别的程序用 HWND_TOPMOST 置顶后会盖住我们。
 // "screen-saver" 是 Electron 在 Windows 上能拿到的最高常规层级，
@@ -93,7 +93,7 @@ let panelVisible = false;
 let panelView = null;
 let win = null;
 
-let lastTouch = 0;          // 最近一次点悬浮台的时间
+let lastTouch = 0;          // 最近一次点 Pane 的时间
 let lastFg = 0;             // 上一次看到的前台窗口
 let graceUntil = 0;         // 宽限期：托盘恢复后不急着藏
 let autoHideEnabled = true; // 点别的窗口时是否沉到底层
@@ -472,7 +472,7 @@ function createWindow() {
     skipTaskbar: true,
     alwaysOnTop: true,
     hasShadow: true,
-    title: "AI 悬浮台",
+    title: "Pane",
     show: false,
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
@@ -572,7 +572,7 @@ function toggleWin() {
 function buildTrayMenu() {
   const pinned = !!(win && win.isAlwaysOnTop());
   return Menu.buildFromTemplate([
-    { label: win && win.isVisible() ? "隐藏悬浮台" : "显示悬浮台", click: toggleWin },
+    { label: win && win.isVisible() ? "隐藏 Pane" : "显示 Pane", click: toggleWin },
     { type: "separator" },
     {
       label: "窗口置顶",
@@ -689,7 +689,7 @@ function createTray() {
   const icon = nativeImage.createFromPath(path.join(RES_DIR, "assets", "tray.ico"));
   if (icon.isEmpty()) console.error("[tray] 图标加载失败");
   tray = new Tray(icon);
-  tray.setToolTip("AI 悬浮台");
+  tray.setToolTip("Pane");
   tray.setContextMenu(buildTrayMenu());
   tray.on("click", toggleWin);
   tray.on("double-click", () => {
@@ -1691,7 +1691,7 @@ ipcMain.handle("win:setPos", (_e, x, y) => {
     if (edgeHide.isDocked()) edgeHide.undock("拖动");
     edgeHide.touch();
   }
-  // 夹在屏幕工作区内，避免把悬浮台拖到看不见的地方
+  // 夹在屏幕工作区内，避免把 Pane 拖到看不见的地方
   const wa = screen.getDisplayNearestPoint({ x, y }).workArea;
   const [w, h] = win.getSize();
   const nx = Math.min(Math.max(Math.round(x), wa.x), wa.x + wa.width - w);
@@ -1884,7 +1884,7 @@ ipcMain.handle("win:toTray", () => {
     trayHinted = true;
     try {
       tray.displayBalloon({
-        title: "AI 悬浮台",
+        title: "Pane",
         content: "已收进托盘。点托盘图标可以再打开，右键选「退出」才是真的关掉。",
       });
     } catch {}

@@ -152,7 +152,7 @@ step("写好 启动.bat（ASCII，避免 cmd 按 GBK 读出乱码）");
 fs.writeFileSync(
   path.join(OUT, "使用说明.txt"),
   [
-    "Pane —— 本地程序悬浮台",
+    "Pane —— 本地程序管理条",
     "",
     "启动：双击 Pane.exe",
     "",
