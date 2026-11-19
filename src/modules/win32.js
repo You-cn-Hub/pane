@@ -68,6 +68,11 @@ function load() {
       ShowWindow: user32.func("bool ShowWindow(intptr_t hWnd, int nCmdShow)"),
       SetForegroundWindow: user32.func("bool SetForegroundWindow(intptr_t hWnd)"),
       GetForegroundWindow: user32.func("intptr_t GetForegroundWindow()"),
+      BringWindowToTop: user32.func("bool BringWindowToTop(intptr_t hWnd)"),
+      SetFocus: user32.func("intptr_t SetFocus(intptr_t hWnd)"),
+      AttachThreadInput: user32.func("bool AttachThreadInput(uint32 idAttach, uint32 idAttachTo, bool fAttach)"),
+      GetCurrentThreadId: kernel32.func("uint32 GetCurrentThreadId()"),
+      GetCursorPos: user32.func("bool GetCursorPos(_Out_ int32_t* pt)"),
       SetWindowPos: user32.func("bool SetWindowPos(intptr_t hWnd, intptr_t hAfter, int x, int y, int cx, int cy, uint32 flags)"),
       GetWindowLongW: user32.func("int32 GetWindowLongW(intptr_t hWnd, int nIndex)"),
       SetWindowLongW: user32.func("int32 SetWindowLongW(intptr_t hWnd, int nIndex, int32 dwNewLong)"),
@@ -80,6 +85,15 @@ function load() {
       CloseHandle: kernel32.func("bool CloseHandle(intptr_t h)"),
       QueryFullProcessImageNameW: kernel32.func("bool QueryFullProcessImageNameW(intptr_t h, uint32 flags, _Out_ uint16_t* buf, _Inout_ uint32* size)"),
     };
+    // SwitchToThisWindow 是「抢前台」的最后一层兜底。
+    // 它从 Win95 起就在 user32 里，但单独加载：万一哪天系统真没了这个符号，
+    // 也只有兜底那一层失效，不至于整块原生能力都起不来。
+    try {
+      fns.SwitchToThisWindow = user32.func("void SwitchToThisWindow(intptr_t hWnd, bool fAltTab)");
+    } catch {
+      fns.SwitchToThisWindow = null;
+    }
+
     available = true;
     return fns;
   } catch (e) {
@@ -263,12 +277,86 @@ function findWindow({ process: procName, klass, title } = {}) {
 }
 // ---------- 动作 ----------
 
+/**
+ * 把窗口抢到前台。
+ *
+ * 裸 SetForegroundWindow 只在「调用进程本来就是前台」或「窗口属于当前输入队列」时才生效，
+ * 否则 Windows 只让任务栏闪一下，什么都不发生。
+ * Pane 自己是 WS_EX_NOACTIVATE（点击不激活窗口，这样点条目不会把悬浮条顶到前面），
+ * 代价是点它的那一刻前台还停在别的程序上 —— 恰好踩中上面那条限制。
+ * 所以「收着 → 还原并唤到前台」经常只见窗口还原、不见它来到前面。
+ *
+ * 按代价从低到高试三层，第一次成功就停：
+ *   1. 直接设前台 —— Pane 碰巧是前台时的快路径
+ *   2. 把本线程挂到前台线程与目标线程的输入队列上再设（AttachThreadInput）
+ *   3. SwitchToThisWindow 兜底（未文档化的老 API，系统自己也还在用）
+ *
+ * 已经在前后不动输入焦点，免得打断用户正在打字的地方。
+ * @returns {{ok:boolean, focused?:boolean, via?:string, error?:string}}
+ *          focused=false 表示三层都没成功，窗口可能仍被压在下面。
+ */
 function focus(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
+  if (!hWnd) return { ok: false, error: "bad_hwnd" };
   try {
     if (fns.IsIconic(hWnd)) fns.ShowWindow(hWnd, SW_RESTORE);
-    const ok = fns.SetForegroundWindow(hWnd);
-    return { ok: true, focused: !!ok };
+
+    if (fns.GetForegroundWindow() === hWnd) {
+      fns.BringWindowToTop(hWnd);
+      return { ok: true, focused: true, via: "already" };
+    }
+
+    if (fns.SetForegroundWindow(hWnd) && fns.GetForegroundWindow() === hWnd) {
+      return { ok: true, focused: true, via: "direct" };
+    }
+
+    // 第二层：挂输入队列。前台窗口和目标窗口各挂一次——
+    // 只挂前台线程在多数机器上就够，但有些程序（UWP、带输入法钩子的）
+    // 要求目标线程自己在队列里，两层都试才稳。
+    const fg = fns.GetForegroundWindow();
+    const myTid = fns.GetCurrentThreadId();
+    const fgTid = fg ? fns.GetWindowThreadProcessId(fg, Buffer.alloc(4)) : 0;
+    const tgtTid = fns.GetWindowThreadProcessId(hWnd, Buffer.alloc(4));
+
+    const attached = [];
+    const attach = (tid) => {
+      if (!tid || tid === myTid || attached.includes(tid)) return;
+      try {
+        if (fns.AttachThreadInput(myTid, tid, true)) attached.push(tid);
+      } catch {}
+    };
+    attach(fgTid);
+    attach(tgtTid);
+
+    let ok = false;
+    try {
+      fns.BringWindowToTop(hWnd);
+      ok = !!fns.SetForegroundWindow(hWnd);
+      if (ok) {
+        try {
+          fns.SetFocus(hWnd);
+        } catch {}
+      }
+    } catch {}
+
+    // 一定要解挂：挂着输入队列会让本进程和对方共享输入状态，
+    // 不解的话键盘焦点以后都可能是错的。顺序与挂上相反。
+    for (const tid of attached.reverse()) {
+      try {
+        fns.AttachThreadInput(myTid, tid, false);
+      } catch {}
+    }
+
+    if (ok && fns.GetForegroundWindow() === hWnd) {
+      return { ok: true, focused: true, via: "attach" };
+    }
+
+    // 第三层：兜底
+    try {
+      if (fns.SwitchToThisWindow) fns.SwitchToThisWindow(hWnd, true);
+    } catch {}
+    const done = fns.GetForegroundWindow() === hWnd;
+    return { ok: true, focused: done, via: done ? "switch" : "failed" };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -358,6 +446,22 @@ function moveWin(hWnd, x, y, w, h) {
     const flags = SWP_NOZORDER | SWP_NOACTIVATE;
     fns.SetWindowPos(hWnd, 0, x, y, w, h, flags);
     return { ok: true, rect: rectOf(hWnd) };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
+ * 鼠标指针的屏幕坐标。
+ * 贴边收起要靠它判断「鼠标是不是在往把手那边去」——
+ * 窗口收到收起之后界面收不到这个信息。
+ */
+function cursorPos() {
+  if (!load()) return { ok: false, error: "no_native" };
+  try {
+    const buf = Buffer.alloc(8);
+    if (!fns.GetCursorPos(buf)) return { ok: false, error: "get_cursor_failed" };
+    return { ok: true, x: buf.readInt32LE(0), y: buf.readInt32LE(4) };
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -632,6 +736,31 @@ function isAvailable() {
   return !!fns;
 }
 
+// 键鼠空闲时长：静默安装新版本之前要确认用户真的不在用电脑
+let idleFns = null;
+function idleMs() {
+  if (!load()) return 0;
+  try {
+    if (!idleFns) {
+      idleFns = {
+        GetLastInputInfo: user32.func("bool GetLastInputInfo(_Inout_ uint8_t* lii)"),
+        GetTickCount: kernel32.func("uint32 GetTickCount()"),
+      };
+    }
+    // LASTINPUTINFO { cbSize: DWORD, dwTime: DWORD }
+    const buf = Buffer.alloc(8);
+    buf.writeUInt32LE(8, 0);
+    if (!idleFns.GetLastInputInfo(buf)) return 0;
+    const last = buf.readUInt32LE(4);
+    if (!last) return 0;
+    const now = idleFns.GetTickCount() >>> 0;
+    // 都是 32 位 tick，49 天回绕一次，用无符号相减
+    return ((now - last) >>> 0) || 0;
+  } catch {
+    return 0;
+  }
+}
+
 module.exports = {
   isAvailable,
   getLoadError: () => loadError,
@@ -647,6 +776,7 @@ module.exports = {
   setTopmost,
   moveWin,
   foreground,
+  cursorPos,
   stateOf,
   minimizeWin,
   restoreWin,
@@ -656,4 +786,5 @@ module.exports = {
   closeByProcess,
   countProcess,
   showCmdOf,
+  idleMs,
 };

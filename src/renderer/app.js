@@ -79,6 +79,7 @@ function render(list) {
 
       if (r.mode === "minimize") tip(`已最小化 ${p.name}`);
       else if (r.mode === "hide") tip(`已收起 ${p.name}`);
+      else if (r.focused === false) tip(`已还原 ${p.name}，但没能抢到前台`, true);
       else tip(`已置顶 ${p.name}`);
 
       // 让其它行的高亮跟着让位（不重刷数据，只改 class）
@@ -278,7 +279,16 @@ railEl.addEventListener("pointerdown", async (e) => {
   window.wb.touch();
   if (e.button !== 0) return;
   // 按钮上不做拖动：setPointerCapture 会把随后的 click 也劫持到 rail，按钮就点不动了
-  if (e.target.closest(".item, .hbtn, .add, .rmenu, .settings")) return;
+  if (e.target.closest(".item, .hbtn, .add, .rmenu, .settings, .shelf")) return;
+  // 锁了位置就拖不动，提示一次（两秒内不重复提示，免得连点刷屏）
+  const st = await window.wb.getSettings();
+  if (st && st.posLocked) {
+    if (Date.now() - lastLockTip > 2000) {
+      lastLockTip = Date.now();
+      tip("位置已锁定。右键托盘或设置里可以解锁");
+    }
+    return;
+  }
   const [wx, wy] = await window.wb.getPos();
   drag = { id: e.pointerId, mx: e.screenX, my: e.screenY, wx, wy };
   try { railEl.setPointerCapture(e.pointerId); } catch {}
@@ -423,6 +433,70 @@ async function paintHotkey() {
   hkBtn.classList.toggle("unset", !acc);
 }
 
+// 贴边自动收起开关
+const edgeBtn = document.getElementById("edgeBtn");
+async function paintEdgeHide() {
+  try {
+    const s = await window.wb.getSettings();
+    const on = s.edgeHide !== false;
+    edgeBtn.textContent = on ? "开" : "关";
+    edgeBtn.classList.toggle("unset", !on);
+  } catch {}
+}
+edgeBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const s = await window.wb.getSettings();
+  const next = s.edgeHide === false; // 当前关着 → 打开
+  const r = await window.wb.setEdgeHide(next);
+  await paintEdgeHide();
+  tip(r && r.ok ? (next ? "已开启贴边自动收起" : "已关闭贴边自动收起") : "设置失败", !(r && r.ok));
+});
+
+// 锁定位置
+const lockBtn = document.getElementById("lockBtn");
+async function paintLock() {
+  try {
+    const s = await window.wb.getSettings();
+    lockBtn.textContent = s.posLocked ? "开" : "关";
+    lockBtn.classList.toggle("unset", !s.posLocked);
+  } catch {}
+}
+lockBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const s = await window.wb.getSettings();
+  const next = !s.posLocked;
+  const r = await window.wb.setPosLocked(next);
+  await paintLock();
+  tip(r && r.ok ? (next ? "位置已锁定，拖动不会动" : "位置已解锁") : "设置失败", !(r && r.ok));
+});
+
+// 开机自启：开发模式下没有意义，主进程会拒绝，这里直接隐藏那一行
+const autoBtn = document.getElementById("autoBtn");
+const autoRow = document.getElementById("autostartRow");
+async function paintAutoStart() {
+  try {
+    const s = await window.wb.getSettings();
+    if (!s.packaged) {
+      autoRow.hidden = true;
+      return;
+    }
+    autoRow.hidden = false;
+    autoBtn.textContent = s.openAtLogin ? "开" : "关";
+    autoBtn.classList.toggle("unset", !s.openAtLogin);
+  } catch {}
+}
+autoBtn.addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const s = await window.wb.getSettings();
+  const next = !s.openAtLogin;
+  const r = await window.wb.setAutoStart(next);
+  await paintAutoStart();
+  tip(
+    r && r.ok ? (next ? "已设为开机自启" : "已取消开机自启") : (r && r.error) || "设置失败",
+    !(r && r.ok)
+  );
+});
+
 function setHint(msg, isErr) {
   hkHint.innerHTML =
     msg ||
@@ -437,6 +511,9 @@ function toggleSettings(force) {
   gearBtn.classList.toggle("active", next);
   if (next) {
     paintHotkey();
+    paintEdgeHide();
+    paintLock();
+    paintAutoStart();
     setHint("");
   } else if (recording) {
     stopRecording();
@@ -678,3 +755,145 @@ document.getElementById("envdismiss")?.addEventListener("click", () => {
 
 // 启动后延迟一点探测，别和首屏渲染抢
 setTimeout(refreshEnv, 1500);
+
+// ---------- 文件中转架 ----------
+// 只记路径，不复制文件：拖进来暂存，换个窗口再拖出去
+
+const shelfEl = document.getElementById("shelf");
+const shelfHead = document.getElementById("shelfHead");
+const shelfBody = document.getElementById("shelfBody");
+const shelfItems = document.getElementById("shelfItems");
+const shelfCount = document.getElementById("shelfCount");
+const shelfEmpty = document.getElementById("shelfEmpty");
+let shelfOpened = false;
+
+function extBadge(it) {
+  const e = (it.ext || "").toUpperCase();
+  return e ? e.slice(0, 4) : "文件";
+}
+
+function renderShelf(list) {
+  shelfCount.textContent = String(list.length || 0);
+  shelfItems.innerHTML = "";
+  shelfEmpty.hidden = (list || []).length > 0;
+
+  for (const it of list) {
+    const row = document.createElement("div");
+    row.className = "sitem" + (it.exists ? "" : " gone");
+    row.title = it.path + (it.exists ? "" : "\n文件已不在这个位置");
+    row.innerHTML = `
+      <span class="shandle" title="按住拖出去">⣿</span>
+      <span class="sext">${extBadge(it)}</span>
+      <span class="sname">${it.name}</span>
+      <span class="sx" title="从中转架移除">×</span>
+    `;
+
+    // 点这一行：打开文件
+    row.addEventListener("click", async (e) => {
+      if (e.target.closest(".sx") || e.target.closest(".shandle")) return;
+      if (!it.exists) {
+        tip("这个文件已经不在了", true);
+        return;
+      }
+      const r = await window.wb.shelfOpen(it.path);
+      if (!r.ok) tip(r.error || "打不开", true);
+    });
+
+    // 握把：按住就能拖到别的窗口
+    row.querySelector(".shandle").addEventListener("pointerdown", (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!it.exists) {
+        tip("这个文件已经不在了", true);
+        return;
+      }
+      window.wb.shelfDrag(it.path);
+    });
+
+    row.querySelector(".sx").addEventListener("click", async (e) => {
+      e.stopPropagation();
+      await window.wb.shelfRemove(it.path);
+      refreshShelf();
+    });
+
+    // 右键：复制路径
+    row.addEventListener("contextmenu", async (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      await window.wb.shelfCopyPath(it.path);
+      tip("已复制路径");
+    });
+
+    shelfItems.appendChild(row);
+  }
+}
+
+async function refreshShelf() {
+  try {
+    renderShelf(await window.wb.shelfList());
+  } catch {}
+}
+
+function openShelf(on) {
+  shelfOpened = typeof on === "boolean" ? on : !shelfOpened;
+  shelfBody.hidden = !shelfOpened;
+  shelfHead.classList.toggle("open", shelfOpened);
+  if (shelfOpened) refreshShelf();
+}
+
+shelfHead.addEventListener("click", (e) => {
+  e.stopPropagation();
+  openShelf();
+});
+
+document.getElementById("shelfPrune").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  const r = await window.wb.shelfPrune();
+  tip(r.removed ? `清理了 ${r.removed} 个失效条目` : "没有失效条目");
+  refreshShelf();
+});
+
+document.getElementById("shelfClear").addEventListener("click", async (e) => {
+  e.stopPropagation();
+  await window.wb.shelfClear();
+  refreshShelf();
+  tip("中转架已清空");
+});
+
+// 拖入：只在 shelf 区域接管，别影响「拖文件到列表 = 添加程序」的老行为
+async function dropToShelf(e) {
+  const paths = [];
+  for (const f of e.dataTransfer.files || []) {
+    const p = window.wb.getPathForFile(f);
+    if (p) paths.push(p);
+  }
+  if (!paths.length) return;
+  const r = await window.wb.shelfAdd(paths);
+  if (!r.ok) {
+    tip(r.error || "暂存失败", true);
+    return;
+  }
+  if (!shelfOpened) openShelf(true);
+  refreshShelf();
+  tip(`已暂存 ${r.added} 个${r.skipped ? `，跳过 ${r.skipped} 个重复` : ""}`);
+}
+
+for (const el of [shelfEl, shelfHead, shelfBody]) {
+  el.addEventListener("dragover", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = "copy";
+    shelfEl.classList.add("over");
+  });
+  el.addEventListener("dragleave", (e) => {
+    if (!shelfEl.contains(e.relatedTarget)) shelfEl.classList.remove("over");
+  });
+  el.addEventListener("drop", async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    shelfEl.classList.remove("over");
+    await dropToShelf(e);
+  });
+}
+
+refreshShelf();

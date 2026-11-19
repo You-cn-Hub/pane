@@ -40,6 +40,8 @@ function buildPaths({ isPackaged, appDir, userDataDir, resourcesPath, exeDir }) 
     WINMGR: path.join(RES_DIR, "winmgr.py"),
     SERVER_DIR: path.join(RES_DIR, "server"),
     LOG_DIR: path.join(DATA_DIR, "logs"),
+    UPDATES_DIR: path.join(DATA_DIR, "updates"),
+    SHELF_FILE: path.join(DATA_DIR, "shelf.json"),
     TRACE_FILE: path.join(DATA_DIR, "_trace.log"),
     ICON_LOG: path.join(DATA_DIR, "_icon.log"),
   };

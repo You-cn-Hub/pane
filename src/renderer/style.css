@@ -170,6 +170,8 @@ html, body {
   color: var(--faint);
 }
 .shint.err { color: var(--danger); }
+/* 后面几组设置项：和上面那组隔开，别糊成一片 */
+.srow.gap-row { margin-top: 10px; }
 
 /* 列表 */
 .list {
@@ -583,3 +585,105 @@ body.dragging .grip { background: rgba(255, 255, 255, 0.5); }
 .envwarn-t { color: var(--danger-soft); font-weight: 600; margin-bottom: 4px; }
 .envwarn-h { color: var(--muted); margin-bottom: 8px; }
 .envwarn-a { display: flex; gap: 8px; }
+/* 文件中转架：只记路径，网格紧一点，别占掉条目区 */
+.shelf {
+  margin-top: 6px;
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+  flex: none;
+}
+.shelf.over {
+  outline: 1px dashed var(--info);
+  outline-offset: -2px;
+  border-radius: 8px;
+}
+.shelf-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 3px 4px;
+  border-radius: 6px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--muted);
+}
+.shelf-head:hover { background: var(--white-hover); }
+.shelf-head.open { color: var(--text); }
+.shelf-title::before { content: "\25B8 "; }
+.shelf-head.open .shelf-title::before { content: "\25BE "; }
+.shelf-count {
+  min-width: 18px;
+  text-align: center;
+  font-size: 10px;
+  color: var(--faint);
+  background: var(--white-hover);
+  border-radius: 9px;
+  padding: 0 5px;
+}
+.shelf-body { margin-top: 4px; }
+.shelf-empty {
+  padding: 6px 4px;
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--faint);
+}
+.shelf-items {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  max-height: 170px;
+  overflow-y: auto;
+}
+.sitem {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.sitem:hover { background: var(--white-hover); }
+.sitem.gone { opacity: .45; }
+.shandle {
+  flex: none;
+  font-size: 10px;
+  letter-spacing: -1px;
+  color: var(--faint);
+  cursor: grab;
+}
+.shandle:active { cursor: grabbing; }
+.sext {
+  flex: none;
+  min-width: 26px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  text-align: center;
+  font-size: 9px;
+  color: var(--info);
+  background: var(--white-hover);
+}
+.sname {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.sx { flex: none; font-size: 12px; color: var(--faint); padding: 0 2px; }
+.sx:hover { color: var(--danger-soft); }
+.shelf-acts { display: flex; gap: 6px; margin-top: 4px; }
+.shelf-act {
+  flex: 1;
+  padding: 3px 0;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--white-hover);
+  color: var(--muted);
+  font: inherit;
+  font-size: 10px;
+  cursor: pointer;
+}
+.shelf-act:hover { color: var(--text); }

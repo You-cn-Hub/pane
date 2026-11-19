@@ -32,12 +32,13 @@ test("error 即使 trace 关闭也会落盘", () => {
   assert.ok(content.includes("boom"), "应含错误详情");
 });
 
-test("trace 关闭时不写文件", () => {
+test("trace 关闭时也落盘（用户那边没有控制台，日志是唯一现场）", () => {
   reset();
   const log = createLogger({ logDir: TMP, enabled: false });
   log.trace("调试信息");
   const f = log.currentFile;
-  assert.ok(!fs.existsSync(f), "不应生成文件");
+  assert.ok(fs.existsSync(f), "应生成文件");
+  assert.ok(fs.readFileSync(f, "utf-8").includes("[TRACE] 调试信息"));
 });
 
 test("trace 开启时会写文件", () => {

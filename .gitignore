@@ -8,6 +8,12 @@ release_old/
 _old_build*/
 _installtest/
 
+# 手工打 asar 时的中间目录与脚本（2026-11-19 加）
+_stage/
+_buildtmp/
+_build-dev/
+_p.js
+
 # 运行时数据（属于每个使用者，不该进仓库）
 data/
 logs/

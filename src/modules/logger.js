@@ -56,8 +56,9 @@ function createLogger(deps) {
       if (level === "ERROR") console.error(line.trim());
       else if (enabled) console.log(line.trim());
     } catch {}
-    // 文件：error 永远写，其他按开关
-    if (level !== "ERROR" && !enabled) return;
+    // 文件：全都写。用户那边没有控制台，日志是唯一能拿到现场的地方；
+    // 只写 ERROR 时「点了一下没反应」这类问题根本无从查起。
+    // 量不大（一天几十 KB），保留 7 天自动清。
     if (!ensureDir()) return;
     try {
       fs.appendFileSync(fileForToday(), line, "utf-8");

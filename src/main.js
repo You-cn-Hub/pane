@@ -13,7 +13,7 @@
  * 这里只保留必须由主进程持有的东西：窗口、托盘、界面状态。
  */
 
-const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut, WebContentsView, screen, shell, dialog, session } = require("electron");
+const { app, BrowserWindow, Tray, Menu, nativeImage, ipcMain, globalShortcut, WebContentsView, screen, shell, dialog, session, clipboard } = require("electron");
 const { execFile, spawn } = require("child_process");
 const fs = require("fs");
 const path = require("path");
@@ -22,10 +22,12 @@ const { writeFileSafe, readJsonSafe, cleanupTempFiles } = require("./modules/saf
 const { buildPaths, makeExpander, seedDataDirs } = require("./modules/paths");
 const { createLogger } = require("./modules/logger");
 const { createSettings } = require("./modules/settings");
+const { createEdgeHide } = require("./modules/edgehide");
 const { createWinMgr } = require("./modules/winmgr");
 const win32Native = require("./modules/win32");
 const { createUpdater } = require("./modules/updater");
 const { createPluginService } = require("./modules/plugins");
+const { createShelf } = require("./modules/shelf");
 const { createIconService } = require("./modules/icons");
 const { createLauncher, sleep } = require("./modules/launcher");
 const { looksLikeLauncher, pickRealProcess } = require("./modules/launcherdetect");
@@ -100,6 +102,9 @@ let selfHwnd = 0;           // 自己的窗口句柄
 let autoHideTimer = null;
 let fgDaemon = null;
 let fgBuf = "";
+let edgeHide = null;        // 贴边自动收起（createWindow 之后才建）
+let edgeHideOn = true;
+let posLocked = false;      // 锁定窗格位置：锁定后拖不动
 
 const iconCache = new Map();
 
@@ -112,14 +117,20 @@ const winmgr = createWinMgr({
   log: trace,
 });
 
-// 自动更新：从 GitHub Releases 拉新版，失败不影响主程序
+// 自动更新：先试直连 GitHub，不通就走 api + 镜像；失败不影响主程序
 const updater = createUpdater({
-  log: (m) => console.log(m),
+  log: trace,
   onStatus: (s) => {
-    if (win) win.webContents.send("update:status", s);
+    if (win && !win.isDestroyed()) win.webContents.send("update:status", s);
   },
+  updateDir: PATHS.UPDATES_DIR,
+  idleMs: () => win32Native.idleMs(),
+  getAutoUpdate: () => settingsService.load().autoUpdate !== false,
 });
 const runWinMgr = winmgr.run;
+
+// 文件中转架：只记路径，不复制文件
+const shelf = createShelf({ shelfFile: PATHS.SHELF_FILE });
 
 // 程序条目
 const pluginService = createPluginService({
@@ -269,16 +280,22 @@ async function activate(id, opts = {}) {
     const r = await resolveWindow(p);
     if (!r.ok) return { ok: false, error: r.error };
     await runWinMgr(["show", "--hidden", "--process", proc]);
-    await runWinMgr(["focus", "--process", proc]);
+    const fr = await runWinMgr(["focus", "--process", proc]);
     activeId = id;
-    return { ok: true, mode: "shown", name: p.name, title: r.title };
+    if (fr.ok && fr.focused === false) trace(`[focus] ${p.name} 没能抢到前台, via=${fr.via || "?"}`);
+    return { ok: true, mode: "shown", name: p.name, title: r.title, focused: fr.focused };
   }
 
   // 三态切换的判断全在窗口层：开着→最小化；收着→置顶显示
   const r = await runWinMgr(["toggle", "--hidden", "--process", proc]);
   if (!r.ok) return { ok: false, silent: true };
   activeId = r.action === "minimize" || r.action === "hide" ? null : id;
-  return { ok: true, mode: r.action, name: p.name, title: st.title };
+  // 抢前台的路径记一行 trace：用户反馈「点了一下没反应」时，
+// 看一眼就知道是根本没走到这一层，还是走到了但被系统拒了（via=failed）
+  if (r.action === "front") {
+    trace(`[focus] ${p.name} via=${r.via || "?"} focused=${r.focused}`);
+  }
+  return { ok: true, mode: r.action, name: p.name, title: st.title, focused: r.focused };
 }
 
 // 只启动进程，不切换面板
@@ -484,6 +501,8 @@ function createWindow() {
 
   const savePos = () => {
     try {
+      // 贴边收起时窗口停在屏幕外，那个坐标不是用户排好的位置，不能存下来
+      if (edgeHide && !edgeHide.isSettled()) return;
       const [x, y] = win.getPosition();
       writeFileSafe(posFile, JSON.stringify({ x, y }));
     } catch {}
@@ -523,6 +542,11 @@ function createWindow() {
 
 function toggleWin() {
   if (!win) return;
+  // 收在边上时，唤出 = 把它从边上捞回来，不是再藏一层
+  if (edgeHide && edgeHide.isDocked()) {
+    edgeHide.undock("唤出");
+    return;
+  }
   if (!win.isVisible()) {
     win.show();
     try {
@@ -573,6 +597,18 @@ function buildTrayMenu() {
         refreshTray();
       },
     },
+    {
+      label: "贴边自动收起",
+      type: "checkbox",
+      checked: edgeHideOn,
+      click: (item) => setEdgeHide(item.checked),
+    },
+    {
+      label: "锁定位置",
+      type: "checkbox",
+      checked: posLocked,
+      click: (item) => setPosLocked(item.checked),
+    },
     { type: "separator" },
     ...(app.isPackaged
       ? [
@@ -580,19 +616,7 @@ function buildTrayMenu() {
             label: "开机自启",
             type: "checkbox",
             checked: app.getLoginItemSettings().openAtLogin,
-            click: (item) => {
-              app.setLoginItemSettings({
-                openAtLogin: item.checked,
-                path: process.execPath,
-                args: [],
-              });
-              if (win) {
-                win.webContents.send("state:changed", {
-                  msg: item.checked ? "已设为开机自启" : "已取消开机自启",
-                });
-              }
-              refreshTray();
-            },
+            click: (item) => setAutoStart(item.checked),
           },
           { type: "separator" },
           { label: "检查更新…", click: () => updater.checkManual() },
@@ -615,6 +639,50 @@ function buildTrayMenu() {
 function refreshTray() {
   if (!tray) return;
   tray.setContextMenu(buildTrayMenu());
+}
+
+/** 开 / 关贴边自动收起，同时落盘并刷新托盘勾选状态 */
+function setEdgeHide(on) {
+  edgeHideOn = !!on;
+  saveSettings({ edgeHide: edgeHideOn });
+  if (edgeHide) edgeHide.setEnabled(edgeHideOn);
+  if (win) {
+    win.webContents.send("state:changed", {
+      msg: edgeHideOn ? "已开启贴边自动收起" : "已关闭贴边自动收起",
+    });
+  }
+  refreshTray();
+}
+
+/** 锁定 / 解锁窗格位置 */
+function setPosLocked(on) {
+  posLocked = !!on;
+  saveSettings({ posLocked });
+  if (win) {
+    win.webContents.send("state:changed", {
+      msg: posLocked ? "位置已锁定，拖动不会动" : "位置已解锁",
+    });
+  }
+  refreshTray();
+}
+
+/** 开机自启。只有打包版才有意义 —— 开发模式下注册的是 electron.exe */
+function setAutoStart(on) {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!on,
+      path: process.execPath,
+      args: [],
+    });
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  const now = app.getLoginItemSettings().openAtLogin;
+  if (win) {
+    win.webContents.send("state:changed", { msg: now ? "已设为开机自启" : "已取消开机自启" });
+  }
+  refreshTray();
+  return { ok: true, openAtLogin: now };
 }
 
 function createTray() {
@@ -778,6 +846,7 @@ function registerHotkeys() {
     try {
       globalShortcut.register(p.hotkey, () => {
         if (!win) return;
+        if (edgeHide && edgeHide.isDocked()) edgeHide.undock("热键");
         win.show();
         win.webContents.send("hotkey:trigger", p.id);
         // 热键是快捷启动，允许顺带把没跑的程序拉起来
@@ -1507,6 +1576,49 @@ ipcMain.handle("app:openWith", async (_e, filePath) => {
   return { ok: true, candidates: out };
 });
 
+// ---------- 文件中转架 ----------
+
+ipcMain.handle("shelf:list", () => shelf.list());
+ipcMain.handle("shelf:add", (_e, paths) => shelf.add(paths));
+ipcMain.handle("shelf:remove", (_e, p) => shelf.remove(p));
+ipcMain.handle("shelf:clear", () => shelf.clear());
+ipcMain.handle("shelf:prune", () => shelf.prune());
+
+ipcMain.handle("shelf:open", async (_e, p) => {
+  const err = await shell.openPath(String(p || ""));
+  return err ? { ok: false, error: err } : { ok: true };
+});
+
+ipcMain.handle("shelf:reveal", (_e, p) => {
+  try {
+    shell.showItemInFolder(String(p || ""));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+ipcMain.handle("shelf:copyPath", (_e, p) => {
+  try {
+    clipboard.writeText(String(p || ""));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// 拖出去：必须由用户手势触发，所以用 send（不等返回）
+ipcMain.on("shelf:drag", (e, p) => {
+  const item = shelf.get(p);
+  if (!item) return;
+  try {
+    const icon = nativeImage.createFromPath(path.join(RES_DIR, "assets", "tray.ico"));
+    e.sender.startDrag(icon.isEmpty() ? { file: item.path } : { file: item.path, icon });
+  } catch (err) {
+    trace("[shelf] startDrag 失败: " + err.message);
+  }
+});
+
 // 拖动排序：记下用户排好的顺序，下次启动照这个来
 ipcMain.handle("plugins:reorder", async (_e, ids) => {
   if (!Array.isArray(ids) || !ids.length) return { ok: false, error: "顺序无效" };
@@ -1565,12 +1677,20 @@ ipcMain.handle("app:openExternal", async (_e, url) => {
 
 ipcMain.handle("win:touch", () => {
   lastTouch = Date.now();
+  if (edgeHide) edgeHide.touch();
 });
 
 ipcMain.handle("win:getPos", () => (win ? win.getPosition() : [0, 0]));
 
 ipcMain.handle("win:setPos", (_e, x, y) => {
   if (!win) return;
+  // 锁了位置就不跟着鼠标走，界面那边会提示一次
+  if (posLocked) return { ok: false, locked: true };
+  // 拖动期间不收起；万一正收在边上，先把它捞回来再跟着鼠标走
+  if (edgeHide) {
+    if (edgeHide.isDocked()) edgeHide.undock("拖动");
+    edgeHide.touch();
+  }
   // 夹在屏幕工作区内，避免把悬浮台拖到看不见的地方
   const wa = screen.getDisplayNearestPoint({ x, y }).workArea;
   const [w, h] = win.getSize();
@@ -1665,7 +1785,32 @@ ipcMain.handle("win:isPinned", () => (win ? win.isAlwaysOnTop() : false));
 ipcMain.handle("settings:get", () => ({
   toggleHotkey: settings.toggleHotkey || "",
   registered: !!barHotkey,
+  edgeHide: edgeHideOn,
+  posLocked,
+  openAtLogin: (() => {
+    try {
+      return app.getLoginItemSettings().openAtLogin;
+    } catch {
+      return false;
+    }
+  })(),
+  packaged: app.isPackaged,
 }));
+
+ipcMain.handle("settings:setEdgeHide", (_e, on) => {
+  setEdgeHide(!!on);
+  return { ok: true, edgeHide: edgeHideOn };
+});
+
+ipcMain.handle("settings:setPosLocked", (_e, on) => {
+  setPosLocked(!!on);
+  return { ok: true, posLocked };
+});
+
+ipcMain.handle("settings:setAutoStart", (_e, on) => {
+  if (!app.isPackaged) return { ok: false, error: "开发模式下没有开机自启" };
+  return setAutoStart(!!on);
+});
 
 ipcMain.handle("settings:setHotkey", async (_e, acc) => {
   const prev = settings.toggleHotkey;
@@ -1756,6 +1901,7 @@ ipcMain.handle("panel:hide", () => {
 
 app.on("second-instance", () => {
   if (!win) return;
+  if (edgeHide && edgeHide.isDocked()) edgeHide.undock("二次启动");
   win.show();
   win.setAlwaysOnTop(true, TOP_LEVEL);
   lastFg = 0;
@@ -1798,6 +1944,8 @@ app.whenReady().then(async () => {
   trace("ensureDataDirs done");
   disableProxy(session);
   settings = settingsService.load();
+  edgeHideOn = settings.edgeHide !== false;
+  posLocked = !!settings.posLocked;
   // 只有真的走 Python 通道时才解析解释器；原生可用时这行纯属白拉一个进程
   if (!win32Native.isAvailable()) {
     const py = await winmgr.resolvePython();
@@ -1813,6 +1961,21 @@ app.whenReady().then(async () => {
   registerHotkeys();
   const hk = applyBarHotkey();
   trace("bar hotkey: " + JSON.stringify(hk));
+  // 贴边自动收起：光标轮询 + 滑出 / 滑回
+  edgeHide = createEdgeHide({
+    getBounds: () => (win ? win.getBounds() : null),
+    getWorkArea: (x, y) => screen.getDisplayNearestPoint({ x, y }).workArea,
+    move: (x, y) => {
+      if (win) win.setPosition(x, y);
+    },
+    cursor: () => win32Native.cursorPos(),
+    log: (m) => trace(m),
+    isPanelOpen: () => panelVisible,
+    isVisible: () => !!(win && win.isVisible()),
+  });
+  edgeHide.setEnabled(edgeHideOn);
+  edgeHide.start();
+  trace("edgehide started, enabled=" + edgeHideOn);
   startAutoHide();
   trace("ready");
   // 图标自愈放后台跑，不拖慢启动

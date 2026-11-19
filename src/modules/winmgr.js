@@ -141,8 +141,8 @@ function createWinMgr(deps) {
         // 收着 → 还原并唤到前台
         const rr = native.restoreWin(w.hWnd);
         if (!rr.ok) return rr;
-        native.focus(w.hWnd);
-        return { ok: true, action: "front", focused: true };
+        const fr = native.focus(w.hWnd);
+        return { ok: true, action: "front", focused: !!fr.focused, via: fr.via };
       }
       case "bottom": {
         const w = find();

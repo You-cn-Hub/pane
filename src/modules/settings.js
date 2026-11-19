@@ -7,7 +7,7 @@
 const fs = require("fs");
 const { writeFileSafe, readJsonSafe } = require("./safefs");
 
-const DEFAULTS = { toggleHotkey: "Ctrl+F9" };
+const DEFAULTS = { toggleHotkey: "Ctrl+F9", edgeHide: true, posLocked: false, autoUpdate: true };
 
 /**
  * @param {object} deps

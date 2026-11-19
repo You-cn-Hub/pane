@@ -31,6 +31,21 @@
 
   <div class="list" id="list"></div>
 
+  <div class="shelf" id="shelf">
+    <div class="shelf-head" id="shelfHead" title="点开 / 收起中转架；把文件拖到这里暂存">
+      <span class="shelf-title">中转架</span>
+      <span class="shelf-count" id="shelfCount">0</span>
+    </div>
+    <div class="shelf-body" id="shelfBody" hidden>
+      <div class="shelf-empty" id="shelfEmpty">把文件拖到这里暂存，<br>换个窗口再拖出去</div>
+      <div class="shelf-items" id="shelfItems"></div>
+      <div class="shelf-acts">
+        <button class="shelf-act" id="shelfPrune">清理失效</button>
+        <button class="shelf-act" id="shelfClear">清空</button>
+      </div>
+    </div>
+  </div>
+
   <div class="settings" id="settings" hidden>
     <div class="shead">
       <span>设置</span>
@@ -43,6 +58,22 @@
     <div class="shint" id="hkHint">
       点上面按钮，然后按下组合键。<br>
       必须含 Ctrl / Alt / Shift；按同一个键可以再收起。
+    </div>
+    <div class="srow gap-row">
+      <span class="slabel">贴边自动收起</span>
+      <button class="sbtn" id="edgeBtn">开</button>
+    </div>
+    <div class="srow gap-row">
+      <span class="slabel">锁定位置</span>
+      <button class="sbtn" id="lockBtn">关</button>
+    </div>
+    <div class="srow gap-row" id="autostartRow">
+      <span class="slabel">开机自启</span>
+      <button class="sbtn" id="autoBtn">关</button>
+    </div>
+    <div class="shint">
+      贴边收起：窗格贴住屏幕边缘后滑出去，只留一条边，鼠标碰到就滑回来。<br>
+      锁定位置后拖不动，防止手滑挪走。
     </div>
   </div>
 
