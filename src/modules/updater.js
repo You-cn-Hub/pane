@@ -29,6 +29,11 @@ const API_TIMEOUT_MS = 8000;
 const DL_TIMEOUT_MS = 60000;
 const EU_TIMEOUT_MS = 12000;
 
+/** 只取第一行：electron-updater 的报错常带一长串 URL，日志里留一行够定位了 */
+function firstLine(s) {
+  return String(s || "").split("\n")[0].slice(0, 240);
+}
+
 /** 取一个 URL 的正文，跟随重定向 */
 function httpGetText(url, timeoutMs, redirects = 3) {
   return new Promise((resolve) => {
@@ -131,6 +136,7 @@ function createUpdater(deps = {}) {
   let retryTimer = null;
   let pendingExe = null; // 通道 B 下好的安装包
   let busy = false;
+  let lastEuError = ""; // 上一次 A 通道报错的原因，用来避免同一条打两遍
 
   function setState(patch) {
     state = Object.assign({}, state, patch);
@@ -164,7 +170,10 @@ function createUpdater(deps = {}) {
       log("[update] A 通道下载完成 " + info.version);
       setState({ phase: "ready", version: info.version, message: "新版本已就绪，闲置后自动安装", channel: "github" });
     });
-    eu.on("error", (e) => log("[update] A 通道出错: " + ((e && e.message) || e)));
+    eu.on("error", (e) => {
+      lastEuError = (e && e.message) || String(e);
+      log("[update] A 通道出错: " + firstLine(lastEuError));
+    });
     euReady = true;
     return true;
   }
@@ -172,6 +181,7 @@ function createUpdater(deps = {}) {
   /** 通道 A 检查，带超时；成功返回 true */
   async function tryChannelA() {
     if (!euReady) return false;
+    lastEuError = "";
     try {
       const r = await Promise.race([
         eu.checkForUpdates(),
@@ -183,7 +193,9 @@ function createUpdater(deps = {}) {
       }
       return true;
     } catch (e) {
-      log("[update] A 通道失败: " + ((e && e.message) || e) + "，走镜像通道");
+      const msg = (e && e.message) || String(e);
+      // error 事件已经记过同样的原因，这里不重复刷屏
+      if (msg !== lastEuError) log("[update] A 通道失败: " + firstLine(msg) + "，走镜像通道");
       return false;
     }
   }
