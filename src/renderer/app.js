@@ -273,6 +273,7 @@ setInterval(refresh, 12000);
 // 窗口带 WS_EX_NOACTIVATE，系统拖动不可靠
 const railEl = document.querySelector(".rail");
 let drag = null;
+let lastLockTip = 0;   // 上次提示「位置已锁定」的时间，防止连点刷屏
 
 railEl.addEventListener("pointerdown", async (e) => {
   // 告诉主进程"我刚被点了"，避免自动隐藏把这次交互误判成点了别的窗口
