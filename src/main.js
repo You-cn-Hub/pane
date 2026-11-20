@@ -1382,8 +1382,11 @@ ipcMain.handle("plugin:launch", async (_e, id) => {
 });
 
 ipcMain.handle("plugin:quit", async (_e, id) => {
-  _procCache = null; // 关闭后立刻失效
+  _procCache = null; // 关闭前先失效，免得读到关闭前的旧快照
   const r = await quitApp(id);
+  // 关闭过程中界面可能触发过刷新并重新填了缓存，
+  // 这里再清一次，保证下一次查询读到的是关闭后的真实状态
+  _procCache = null;
   if (win) win.webContents.send("state:changed", { id, msg: r.msg || r.error || "" });
   return r;
 });

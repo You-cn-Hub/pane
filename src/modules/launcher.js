@@ -155,9 +155,6 @@ function createLauncher(deps) {
 
     if (!p.find) return { ok: false, error: "该插件不可关闭" };
 
-    // 先优雅关闭：发 WM_CLOSE 让程序自己退出。
-    // 直接 taskkill /F 会强杀进程，程序来不及保存窗口尺寸和布局，
-    // 下次启动就回到默认小窗口（Obsidian 就是这个问题）。
     const native = (() => {
       try {
         return require("./win32");
@@ -165,23 +162,44 @@ function createLauncher(deps) {
         return null;
       }
     })();
+    const nativeOk = !!(native && native.isAvailable());
 
-    if (native && native.isAvailable()) {
-      const cr = native.closeByProcess(p.find.process);
-      if (cr.ok) {
-        // 最多等 6 秒让程序自己退干净
-        for (let i = 0; i < 24; i++) {
-          await sleep(250);
-          if (native.countProcess(p.find.process) === 0) {
-            return { ok: true, msg: `已关闭 ${p.name}` };
-          }
-        }
+    /** 等进程真的从进程表消失；steps × 250ms */
+    async function waitGone(steps) {
+      if (!nativeOk) return false;
+      for (let i = 0; i < steps; i++) {
+        await sleep(250);
+        if (native.countProcess(p.find.process) === 0) return true;
       }
-      // 优雅关闭没成功（程序无响应 / 只想收托盘），才强制结束
+      return false;
     }
 
-    const kr = await runWinMgr(["kill", "--hidden", "--process", p.find.process]);
-    return { ok: kr.ok, msg: kr.ok ? `已关闭 ${p.name}` : "关闭失败" };
+    // 一、先优雅关闭：发 WM_CLOSE 让程序自己退出。
+    // 直接强杀会来不及保存窗口尺寸和布局，下次启动就回到默认小窗口（Obsidian 就是这个问题）。
+    // 最多等 6 秒。
+    if (nativeOk) {
+      const cr = native.closeByProcess(p.find.process);
+      if (cr.ok && (await waitGone(24))) {
+        return { ok: true, msg: `已关闭 ${p.name}` };
+      }
+    }
+
+    // 二、优雅关闭没成功（程序无响应 / 只想收进托盘）→ 原生强杀。
+    // 不走 Python：用户机器可能没装，杀不掉就会让界面卡在「关闭中」又弹回运行中。
+    if (nativeOk && typeof native.killProcess === "function") {
+      const kr = native.killProcess(p.find.process);
+      if (kr.ok && (await waitGone(12))) {
+        return { ok: true, msg: `已关闭 ${p.name}` };
+      }
+    }
+
+    // 三、原生这条路走不通（例如没有原生模块），最后退回 winmgr
+    const kr2 = await runWinMgr(["kill", "--hidden", "--process", p.find.process]);
+    // 强杀是异步生效的：命令返回时进程往往还在收尾。
+    // 一定要等它真的消失再返回，否则界面过一秒刷新时又读到「运行中」，胶囊就回弹成绿色。
+    const gone = await waitGone(12);
+    if (gone || kr2.ok) return { ok: true, msg: `已关闭 ${p.name}` };
+    return { ok: false, msg: "关闭失败" };
   }
 
   return { portOpen, launchDetached, resolveWindow, launchOnly, quitApp };

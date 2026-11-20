@@ -632,6 +632,20 @@ function isOpen(hWnd) {
  * 这里用 Toolhelp32 快照，直接读进程表，与窗口无关。
  */
 function listProcessNames() {
+  const names = new Set();
+  for (const x of listProcessEntries()) names.add(x.name);
+  return [...names];
+}
+
+/**
+ * 进程表：pid + 进程名。
+ *
+ * 和 listProcessNames 读的是同一份 Toolhelp32 快照，区别是带出 pid ——
+ * 强杀要按 pid 调 TerminateProcess，光有名字不够。
+ *
+ * @returns {Array<{pid:number, name:string}>}
+ */
+function listProcessEntries() {
   if (!load()) return [];
   const TH32CS_SNAPPROCESS = 0x00000002;
   try {
@@ -649,26 +663,76 @@ function listProcessNames() {
     //   szExeFile[260] WCHAR(520)
     // 结构体大小给错，Process32FirstW 会直接返回 false。
     const SIZE = 568;
+    const PID_OFFSET = 8;
     const NAME_OFFSET = 44;
     const pe = Buffer.alloc(SIZE);
     pe.writeUInt32LE(SIZE, 0);
 
-    const names = new Set();
+    const out = [];
     let ok = Process32FirstW(snap, pe);
     let guard = 0;
     while (ok && guard++ < 20000) {
-      const nameBuf = pe.slice(NAME_OFFSET, NAME_OFFSET + 260 * 2);
-      const s = nameBuf.toString("utf16le").replace(/\u0000.*$/, "");
-      if (s) names.add(s);
+      const pid = pe.readUInt32LE(PID_OFFSET);
+      const name = pe
+        .slice(NAME_OFFSET, NAME_OFFSET + 260 * 2)
+        .toString("utf16le")
+        .replace(/\u0000.*$/, "");
+      if (pid && name) out.push({ pid, name });
       ok = Process32NextW(snap, pe);
     }
     try {
       fns.CloseHandle(snap);
     } catch {}
-    return [...names];
+    return out;
   } catch {
     return [];
   }
+}
+
+/**
+ * 强杀某个进程名的全部实例（TerminateProcess）。
+ *
+ * 为什么需要：优雅关闭发 WM_CLOSE，有些程序（Electron 类）只收进托盘不退出；
+ * 这时只能强杀。以前强杀走 Python 的 winmgr.py，用户机器没装 Python 就杀不掉，
+ * 界面上胶囊会一直卡在「关闭中」然后又亮回运行中。这里直调 Win32，不依赖 Python。
+ *
+ * @returns {{ok:boolean, killed:number}}
+ */
+function killProcess(procName) {
+  if (!load() || !procName) return { ok: false, killed: 0 };
+  const want = String(procName).toLowerCase();
+  const wantExe = want.endsWith(".exe") ? want : want + ".exe";
+  const targets = listProcessEntries().filter((x) => {
+    const n = x.name.toLowerCase();
+    return n === want || n === wantExe;
+  });
+  if (!targets.length) return { ok: false, killed: 0 };
+
+  let TerminateProcess = null;
+  try {
+    TerminateProcess = kernel32.func("bool TerminateProcess(intptr_t h, uint32 code)");
+  } catch {
+    return { ok: false, killed: 0 };
+  }
+
+  const PROCESS_TERMINATE = 0x0001;
+  let killed = 0;
+  for (const t of targets) {
+    let h = 0n;
+    try {
+      h = fns.OpenProcess(PROCESS_TERMINATE, false, t.pid);
+    } catch {
+      h = 0n;
+    }
+    if (!h) continue;
+    try {
+      if (TerminateProcess(h, 1)) killed++;
+    } catch {}
+    try {
+      fns.CloseHandle(h);
+    } catch {}
+  }
+  return { ok: killed > 0, killed };
 }
 
 /**
@@ -783,6 +847,8 @@ module.exports = {
   isOpen,
   hasTrayIcon,
   listProcessNames,
+  listProcessEntries,
+  killProcess,
   closeByProcess,
   countProcess,
   showCmdOf,

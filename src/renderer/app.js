@@ -8,6 +8,12 @@ let plugins = [];
 let activeId = null;
 let tipTimer = null;
 
+// 用户点了「关闭」，但进程还没真的退出。
+// 这段时间后端仍会报 running=true，照实画的话胶囊会先绿回来、过几秒才灰。
+// 记在这里，等后端确认进程消失再放开。
+const pendingOff = new Set();
+const QUIT_WATCH_MS = 20000;
+
 function tip(msg, isErr) {
   tipEl.textContent = msg || "";
   tipEl.style.color = isErr ? "#E24B4A" : "";
@@ -28,6 +34,8 @@ function render(list) {
   }
 
   list.forEach((p) => {
+    // 正在收尾的程序：按住显示为已关闭，别让胶囊回弹
+    const running = !!p.running && !pendingOff.has(p.id);
     const row = document.createElement("div");
     row.className = "item" + (p.exeOk ? "" : " missing") + (p.id === activeId ? " active" : "");
     row.dataset.id = p.id;
@@ -39,7 +47,7 @@ function render(list) {
 
     const statusText = !p.exeOk
       ? "找不到程序"
-      : p.running
+      : running
         ? "运行中"
         : "未启动";
 
@@ -49,7 +57,7 @@ function render(list) {
         <span class="nm">${p.name}</span>
         <span class="st">${statusText}</span>
       </span>
-      <span class="switch${p.running ? " on" : ""}" role="switch" aria-checked="${p.running}"></span>
+      <span class="switch${running ? " on" : ""}" role="switch" aria-checked="${running}"></span>
     `;
 
     // 点整行：显示 / 收起界面
@@ -117,6 +125,8 @@ function render(list) {
 
       const wasRunning = sw.classList.contains("on");
       const wantRunning = !wasRunning;
+      // 重新启动时把「正在关闭」的按住标记清掉，否则会一直显示成灰的
+      if (wantRunning) pendingOff.delete(p.id);
 
       // 1) 立刻反馈：切状态 + 加 loading 动效
       sw.classList.toggle("on", wantRunning);
@@ -148,8 +158,18 @@ function render(list) {
       }
 
       tip((r && r.msg) || (wantRunning ? `已启动 ${p.name}` : `已关闭 ${p.name}`));
-      // 3) 稍后跟一次真实状态，兜底外部变化（用户手动关了之类）
-      setTimeout(refresh, 1200);
+
+      if (wantRunning) {
+        // 3) 启动后跟一次真实状态，兜底外部变化
+        setTimeout(refresh, 1200);
+        return;
+      }
+
+      // 关闭：程序往往还要几秒才真的退出，这期间别刷出新状态把胶囊染绿。
+      // 按住这一条，后台每 500ms 问一次，后端确认进程没了才放开。
+      pendingOff.add(p.id);
+      paintRow(p.id, false);
+      watchQuit(p.id);
     });
 
     // 按住上下拖 = 换位置。横向基本不动，所以只看 Y。
@@ -244,11 +264,65 @@ function beginDrag(e, row) {
 async function refresh() {
   try {
     const list = await window.wb.list();
+    // 后端确认已经退出的，撤掉「正在关闭」的按住标记
+    for (const p of list) if (!p.running) pendingOff.delete(p.id);
     render(list);
     return list;
   } catch (e) {
     tip("加载失败：" + ((e && e.message) || e), true);
   }
+}
+
+/** 只改一行，不重画整表（重画会打断正在进行的拖动） */
+function paintRow(id, running) {
+  for (const row of listEl.children) {
+    if (!row.dataset || row.dataset.id !== id) continue;
+    const sw = row.querySelector(".switch");
+    if (sw) {
+      sw.classList.toggle("on", running);
+      sw.setAttribute("aria-checked", String(running));
+    }
+    const st = row.querySelector(".st");
+    // 行内可能有「当前 / 已收起」这类临时文案，别覆盖
+    if (st && !row.classList.contains("active")) {
+      st.textContent = running ? "运行中" : "未启动";
+    }
+    return;
+  }
+}
+
+/**
+ * 关闭之后盯一会儿：进程真的退了就放开按住标记。
+ * 超时还没退，说明程序赖着不走（或后端探测出错），如实画回运行中。
+ */
+function watchQuit(id) {
+  const started = Date.now();
+  const timer = setInterval(async () => {
+    if (!pendingOff.has(id)) {
+      clearInterval(timer);
+      return;
+    }
+    let list = null;
+    try {
+      list = await window.wb.list();
+    } catch {}
+    if (list) {
+      const p = list.find((x) => x.id === id);
+      if (!p || p.running === false) {
+        pendingOff.delete(id);
+        clearInterval(timer);
+        paintRow(id, !!p && !!p.running);
+        return;
+      }
+    }
+    if (Date.now() - started > QUIT_WATCH_MS) {
+      pendingOff.delete(id);
+      clearInterval(timer);
+      paintRow(id, true);
+      tip("已发出关闭，但程序还没退出", true);
+    }
+  }, 500);
+  if (timer.unref) timer.unref();
 }
 
 window.wb.onHotkey((id) => {
