@@ -24,6 +24,7 @@ let loadError = null;
 
 // ---------- 常量 ----------
 const SW_HIDE = 0;
+const SW_SHOW = 5;
 const SW_RESTORE = 9;
 const SW_SHOWMINIMIZED = 2;
 const HWND_TOPMOST = -1;
@@ -305,6 +306,10 @@ function focus(hWnd) {
       const savedCmd = hiddenShowCmd.get(savedKey);
       hiddenShowCmd.delete(savedKey);
       fns.ShowWindow(hWnd, savedCmd === SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED : SW_RESTORE);
+    } else if (!fns.IsWindowVisible(hWnd)) {
+      // 被隐藏（不是最小化）的窗口：SW_SHOW 才能保住原尺寸和最大化状态
+      hiddenShowCmd.delete(String(hWnd));
+      fns.ShowWindow(hWnd, SW_SHOW);
     }
 
     if (fns.GetForegroundWindow() === hWnd) {
@@ -371,15 +376,12 @@ function focus(hWnd) {
 function showWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
-    // 隐藏前是最大化的话，按最大化恢复；否则 SW_RESTORE 会把状态打回普通
-    const key = String(hWnd);
-    const saved = hiddenShowCmd.get(key);
-    if (saved === SW_SHOWMAXIMIZED) {
-      hiddenShowCmd.delete(key);
-      fns.ShowWindow(hWnd, SW_SHOWMAXIMIZED);
-      return { ok: true, shown: true, maximized: true };
+    hiddenShowCmd.delete(String(hWnd));
+    // 隐藏中的窗口用 SW_SHOW：按原 placement 显示，最大化不会掉
+    if (!fns.IsWindowVisible(hWnd)) {
+      fns.ShowWindow(hWnd, SW_SHOW);
+      return { ok: true, shown: true, via: "show" };
     }
-    hiddenShowCmd.delete(key);
     fns.ShowWindow(hWnd, SW_RESTORE);
     return { ok: true, shown: true };
   } catch (e) {
@@ -606,17 +608,22 @@ function restoreWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
     const key = String(hWnd);
-    const saved = hiddenShowCmd.get(key);
     hiddenShowCmd.delete(key);
 
-    // 从「隐藏」状态恢复，且隐藏前是最大化：只能用 SW_SHOWMAXIMIZED。
-    // 走 SW_RESTORE 的话窗口会按普通尺寸摊开，正是用户反馈的那个现象。
-    if (!fns.IsWindowVisible(hWnd) && saved === SW_SHOWMAXIMIZED) {
-      fns.ShowWindow(hWnd, SW_SHOWMAXIMIZED);
-      return { ok: true, restored: true, maximized: true };
+    // 一、隐藏中的窗口：只能用 SW_SHOW，按窗口当前的 placement 显示。
+    //    SW_RESTORE 会把它摊成 rcNormalPosition 里那个普通尺寸
+    //    （实测：最大化 2576x1456 → 隐藏 → SW_RESTORE 变 1920x1059），
+    //    Electron 应用还会因为尺寸突变内部布局跟不上，出现自绘标题栏消失、
+    //    内容被裁掉一圈——用户看到的就是「窗口变小、标题栏没了」。
+    //    这条路径主要来自程序自己点 ×  收进后台（Pane 没参与隐藏，拿不到记录）。
+    if (!fns.IsWindowVisible(hWnd)) {
+      fns.ShowWindow(hWnd, SW_SHOW);
+      if (fns.IsWindowVisible(hWnd)) {
+        return { ok: true, restored: true, via: "show" };
+      }
     }
 
-    // 先记住最小化前的实际矩形（GetWindowRect 在最小化时仍是最后一次正常位置）
+    // 二、最小化中的窗口：SW_RESTORE 是对的，它会还原到最小化前的状态
     const before = rectOf(hWnd);
 
     fns.ShowWindow(hWnd, SW_RESTORE);
