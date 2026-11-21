@@ -708,9 +708,16 @@ function trayIconRect(procName) {
       const base = (x.exe || "").split("\\").pop().toLowerCase();
       return base === want || base === wantExe;
     });
-    const hosts = same.filter((x) => /NotifyIconHost/i.test(x.cls || ""));
-    // 没有专门的宿主窗口就退到主窗口：有些程序把托盘挂在主窗口上
-    const candidates = hosts.length ? hosts : same.filter((x) => x.title);
+    // 托盘宿主窗口优先。Electron 标准实现叫 NotifyIconHost，
+    // 但不少客户端自己起名字（豆包是 Doubao_StatusTrayWindow、
+    // 其他还有 *TrayWindow / SysTray 之类），所以按 "Tray" 一起认。
+    // 都没有才退到主窗口：有些程序把托盘挂在主窗口上。
+    const hosts = same.filter((x) => /NotifyIconHost|Tray/i.test(x.cls || ""));
+    const mains = same.filter((x) => x.title);
+    const candidates = [];
+    for (const x of hosts.concat(mains)) {
+      if (!candidates.includes(x)) candidates.push(x);
+    }
     for (const h of candidates) {
       for (let uid = 0; uid <= 15; uid++) {
         const id = Buffer.alloc(40);
@@ -749,7 +756,7 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
  *
  * @returns {{ok:boolean, via?:string, error?:string}}
  */
-function pokeTrayIcon(procName) {
+function pokeTrayIcon(procName, opts) {
   if (!load() || !procName) return { ok: false, error: "no_native" };
   const found = trayIconRect(procName);
   if (!found) return { ok: false, error: "no_tray_icon" };
@@ -766,10 +773,14 @@ function pokeTrayIcon(procName) {
     const hwnd = BigInt(found.hWnd);
     const uid = BigInt(found.uid);
     const res = Buffer.alloc(8);
-    // 先按下再松开：有些实现只在 DOWN 里处理，有些等 UP 凑成一次完整点击
+    // 默认只发 DOWN：托盘图标是 toggle，DOWN 和 UP 都处理的话会被当成点两次，
+    // 窗口闪一下就又藏回去（豆包实测就是这个现象）。
+    // 有些程序只在 UP 里处理，所以留 opts.withUp 让调用方按需补一条。
     fns.SendMessageTimeoutW(hwnd, WM_APP + 1, uid, BigInt(WM_LBUTTONDOWN), SMTO_ABORTIFHUNG, 800, res);
-    fns.SendMessageTimeoutW(hwnd, WM_APP + 1, uid, BigInt(WM_LBUTTONUP), SMTO_ABORTIFHUNG, 800, res);
-    return { ok: true, via: "message", uid: found.uid };
+    if (opts && opts.withUp) {
+      fns.SendMessageTimeoutW(hwnd, WM_APP + 1, uid, BigInt(WM_LBUTTONUP), SMTO_ABORTIFHUNG, 800, res);
+    }
+    return { ok: true, via: opts && opts.withUp ? "message-down-up" : "message-down", uid: found.uid };
   } catch (e) {
     return { ok: false, error: e.message };
   }

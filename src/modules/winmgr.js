@@ -160,6 +160,12 @@ function createWinMgr(deps) {
               const r1 = await done("tray-message");
               if (r1) return r1;
             }
+            // 一之二、有些程序只在鼠标松开时才处理，补一条 UP
+            const msg2 = native.pokeTrayIcon(wantProc, { withUp: true });
+            if (msg2.ok) {
+              const r2 = await done("tray-message-up");
+              if (r2) return r2;
+            }
             // 二、退回真实点击托盘图标（会短暂借用光标）
             if (typeof native.clickTrayIcon === "function") {
               const tr = await native.clickTrayIcon(wantProc);
