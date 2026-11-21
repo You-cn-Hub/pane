@@ -139,6 +139,29 @@ function createWinMgr(deps) {
         }
 
         // 收着 → 还原并唤到前台
+        //
+        // 先试它自己的托盘图标：Electron 应用点 × 后窗口是「程序自己 hide」的，
+        // Win32 强显会让 Chromium 的 JS 层收不到通知，界面卡住、标题栏消失
+        // （详见 win32.clickTrayIcon 的注释）。托盘点不出来才退回 Win32 还原。
+        const st = native.stateOf(w.hWnd);
+        if (st.ok && !st.visible && typeof native.clickTrayIcon === "function") {
+          return (async () => {
+            const tr = await native.clickTrayIcon(wantProc);
+            if (tr.ok) {
+              await new Promise((r) => setTimeout(r, 500));
+              const after = native.stateOf(w.hWnd);
+              if (after.visible) {
+                const fr = native.focus(w.hWnd);
+                return { ok: true, action: "front", focused: !!fr.focused, via: "tray" };
+              }
+            }
+            const rr = native.restoreWin(w.hWnd);
+            if (!rr.ok) return rr;
+            const fr = native.focus(w.hWnd);
+            return { ok: true, action: "front", focused: !!fr.focused, via: fr.via, trayError: tr && tr.error };
+          })();
+        }
+
         const rr = native.restoreWin(w.hWnd);
         if (!rr.ok) return rr;
         const fr = native.focus(w.hWnd);

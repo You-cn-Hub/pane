@@ -17,6 +17,7 @@ const koffi = require("koffi");
 let user32 = null;
 let kernel32 = null;
 let psapi = null;
+let shell32 = null;
 let fns = null;
 let available = false;
 let enumProto = null;
@@ -58,6 +59,11 @@ function load() {
     } catch {
       psapi = koffi.load("kernel32.dll");
     }
+    try {
+      shell32 = koffi.load("shell32.dll");
+    } catch {
+      shell32 = null;
+    }
 
     fns = {
       EnumWindows: user32.func("bool EnumWindows(void* cb, intptr_t lParam)"),
@@ -74,6 +80,11 @@ function load() {
       AttachThreadInput: user32.func("bool AttachThreadInput(uint32 idAttach, uint32 idAttachTo, bool fAttach)"),
       GetCurrentThreadId: kernel32.func("uint32 GetCurrentThreadId()"),
       GetCursorPos: user32.func("bool GetCursorPos(_Out_ int32_t* pt)"),
+      SetCursorPos: user32.func("bool SetCursorPos(int x, int y)"),
+      // 托盘图标靠真实鼠标事件点击：程序监听的是 shell 转发的鼠标消息，
+      // 直接 SendMessage 到图标窗口没有统一的消息号
+      mouse_event: user32.func("void mouse_event(uint32 flags, uint32 dx, uint32 dy, uint32 data, intptr_t extra)"),
+      GetSystemMetrics: user32.func("int GetSystemMetrics(int n)"),
       SetWindowPos: user32.func("bool SetWindowPos(intptr_t hWnd, intptr_t hAfter, int x, int y, int cx, int cy, uint32 flags)"),
       GetWindowLongW: user32.func("int32 GetWindowLongW(intptr_t hWnd, int nIndex)"),
       SetWindowLongW: user32.func("int32 SetWindowLongW(intptr_t hWnd, int nIndex, int32 dwNewLong)"),
@@ -667,6 +678,135 @@ function isOpen(hWnd) {
   }
 }
 
+// ---------- 托盘图标 ----------
+
+/**
+ * 找某个程序的托盘图标位置。
+ *
+ * 用途：Electron 应用（DSH / 豆包这类）点 × 是自己把窗口 hide、进程留着。
+ * Win32 强显（SW_SHOW）能让窗口框出现，但 Chromium 的 JS 层收不到通知，
+ * 不重排布局、不画自绘标题栏——用户看到「窗口卡住、标题栏没了、内容被裁」。
+ * 让程序自己显示的唯一可靠路径，就是点它自己的托盘图标。
+ *
+ * 定位用 Shell_NotifyIconGetRect：需要 hwnd + uID。
+ * Electron 的托盘宿主 class 是 Electron_NotifyIconHostWindow，
+ * uID 各程序不同，所以 0..15 挨个试，能拿到有效矩形的那次就是。
+ *
+ * @returns {{hWnd:bigint, uid:number, rect:{left,top,right,bottom}}|null}
+ */
+function trayIconRect(procName) {
+  if (!load() || !shell32 || !procName) return null;
+  try {
+    if (!fns.ShellNotifyIconGetRect) {
+      fns.ShellNotifyIconGetRect = shell32.func(
+        "int Shell_NotifyIconGetRect(const void* id, _Out_ uint8_t* rect)"
+      );
+    }
+    const want = String(procName).toLowerCase();
+    const wantExe = want.endsWith(".exe") ? want : want + ".exe";
+    const same = listWindows(true).filter((x) => {
+      const base = (x.exe || "").split("\\").pop().toLowerCase();
+      return base === want || base === wantExe;
+    });
+    const hosts = same.filter((x) => /NotifyIconHost/i.test(x.cls || ""));
+    // 没有专门的宿主窗口就退到主窗口：有些程序把托盘挂在主窗口上
+    const candidates = hosts.length ? hosts : same.filter((x) => x.title);
+    for (const h of candidates) {
+      for (let uid = 0; uid <= 15; uid++) {
+        const id = Buffer.alloc(40);
+        id.writeUInt32LE(40, 0);
+        id.writeBigInt64LE(BigInt(h.hWnd), 8);
+        id.writeUInt32LE(uid, 16);
+        const rect = Buffer.alloc(16);
+        if (fns.ShellNotifyIconGetRect(id, rect) !== 0) continue;
+        const r = {
+          left: rect.readInt32LE(0),
+          top: rect.readInt32LE(4),
+          right: rect.readInt32LE(8),
+          bottom: rect.readInt32LE(12),
+        };
+        if (r.right - r.left < 4 || r.bottom - r.top < 4) continue;
+        return { hWnd: h.hWnd, uid, rect: r };
+      }
+    }
+  } catch {}
+  return null;
+}
+
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * 点一下这个程序的托盘图标，让程序自己把窗口显示出来。
+ *
+ * 任务栏自动隐藏时图标会被挤到屏幕外，这时先把光标压到屏幕底边把任务栏唤出来，
+ * 再重新取位置。点完把光标放回原处，别让用户觉得鼠标被抢了。
+ *
+ * @returns {Promise<{ok:boolean, via?:string, error?:string}>}
+ */
+async function clickTrayIcon(procName) {
+  if (!load() || !shell32) return { ok: false, error: "no_native" };
+  let hit = trayIconRect(procName);
+  if (!hit) return { ok: false, error: "no_tray_icon" };
+
+  const sw = fns.GetSystemMetrics(0);
+  const sh = fns.GetSystemMetrics(1);
+  const onScreen = (r) =>
+    r.left >= 0 && r.top >= 0 && r.right <= sw && r.bottom <= sh && r.top < sh - 1;
+
+  // 原光标位置，点完还回去
+  const cur = Buffer.alloc(8);
+  let savedX = 0;
+  let savedY = 0;
+  let hasCursor = false;
+  try {
+    if (fns.GetCursorPos(cur)) {
+      savedX = cur.readInt32LE(0);
+      savedY = cur.readInt32LE(4);
+      hasCursor = true;
+    }
+  } catch {}
+
+  let via = "icon";
+  if (!onScreen(hit.rect)) {
+    // 任务栏是自动隐藏的：光标压到底边，等它浮出来再取一次
+    try {
+      fns.SetCursorPos(Math.round(sw / 2), sh - 1);
+    } catch {}
+    await sleepMs(700);
+    hit = trayIconRect(procName);
+    if (!hit || !onScreen(hit.rect)) {
+      if (hasCursor) {
+        try {
+          fns.SetCursorPos(savedX, savedY);
+        } catch {}
+      }
+      return { ok: false, error: "tray_hidden", rect: hit ? hit.rect : null };
+    }
+    via = "taskbar-float";
+  }
+
+  const cx = Math.round((hit.rect.left + hit.rect.right) / 2);
+  const cy = Math.round((hit.rect.top + hit.rect.bottom) / 2);
+  try {
+    fns.SetCursorPos(cx, cy);
+    await sleepMs(120);
+    fns.mouse_event(0x0002, 0, 0, 0, 0n); // LEFTDOWN
+    await sleepMs(60);
+    fns.mouse_event(0x0004, 0, 0, 0, 0n); // LEFTUP
+  } catch (e) {
+    return { ok: false, error: e.message };
+  } finally {
+    if (hasCursor) {
+      setTimeout(() => {
+        try {
+          fns.SetCursorPos(savedX, savedY);
+        } catch {}
+      }, 200);
+    }
+  }
+  return { ok: true, via, uid: hit.uid, rect: hit.rect };
+}
+
 /**
  * 这个程序的窗口群体里有没有托盘图标宿主窗口。
  *
@@ -906,6 +1046,8 @@ module.exports = {
   killProcess,
   closeByProcess,
   countProcess,
+  trayIconRect,
+  clickTrayIcon,
   showCmdOf,
   idleMs,
 };
