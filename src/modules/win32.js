@@ -299,7 +299,13 @@ function focus(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   if (!hWnd) return { ok: false, error: "bad_hwnd" };
   try {
-    if (fns.IsIconic(hWnd)) fns.ShowWindow(hWnd, SW_RESTORE);
+    if (fns.IsIconic(hWnd)) {
+      // 最小化前是最大化的话，恢复也要按最大化来，否则会掉成普通尺寸
+      const savedKey = String(hWnd);
+      const savedCmd = hiddenShowCmd.get(savedKey);
+      hiddenShowCmd.delete(savedKey);
+      fns.ShowWindow(hWnd, savedCmd === SW_SHOWMAXIMIZED ? SW_SHOWMAXIMIZED : SW_RESTORE);
+    }
 
     if (fns.GetForegroundWindow() === hWnd) {
       fns.BringWindowToTop(hWnd);
@@ -365,6 +371,15 @@ function focus(hWnd) {
 function showWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
+    // 隐藏前是最大化的话，按最大化恢复；否则 SW_RESTORE 会把状态打回普通
+    const key = String(hWnd);
+    const saved = hiddenShowCmd.get(key);
+    if (saved === SW_SHOWMAXIMIZED) {
+      hiddenShowCmd.delete(key);
+      fns.ShowWindow(hWnd, SW_SHOWMAXIMIZED);
+      return { ok: true, shown: true, maximized: true };
+    }
+    hiddenShowCmd.delete(key);
     fns.ShowWindow(hWnd, SW_RESTORE);
     return { ok: true, shown: true };
   } catch (e) {
@@ -375,6 +390,12 @@ function showWin(hWnd) {
 function hideWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
+    // 先记下当前状态再隐藏：最大化窗口被 SW_HIDE 之后，
+    // SW_RESTORE 恢复回来只有普通尺寸，用户会觉得「窗口变小了」
+    const cmd = showCmdOf(hWnd);
+    if (cmd === SW_SHOWNORMAL || cmd === SW_SHOWMAXIMIZED) {
+      hiddenShowCmd.set(String(hWnd), cmd);
+    }
     fns.ShowWindow(hWnd, SW_HIDE);
     return { ok: true, hidden: true };
   } catch (e) {
@@ -499,6 +520,17 @@ function stateOf(hWnd) {
 // ---------- 最小化 / 还原 ----------
 
 const SW_SHOWNORMAL = 1;
+const SW_SHOWMAXIMIZED = 3;
+
+/**
+ * 被 Pane 隐藏起来的窗口，隐藏前是普通还是最大化。
+ *
+ * 为什么必须记：Windows 上对一个**最大化**窗口调 ShowWindow(SW_HIDE)，
+ * 之后 ShowWindow(SW_RESTORE) 恢复回来的是**普通尺寸**（最大化状态丢了）。
+ * 用户看到的就是「收进托盘前是最大化，用 Pane 唤回来窗口变小了」。
+ * key 用 String(hWnd)，比对 BigInt 稳定。
+ */
+const hiddenShowCmd = new Map();
 
 /**
  * 读 WINDOWPLACEMENT 的 showCmd。
@@ -532,8 +564,13 @@ function minimizeWin(hWnd) {
     // 最小化前把当前实际矩形写进 rcNormalPosition，
     // 这样以后无论走哪条还原路径，恢复的都是「用户最后用的尺寸」，
     // 而不是某个更早过期的大小。
+    //
+    // 但最大化时不能写：那时 GetWindowRect 给的是「最大化后的全屏矩形」，
+    // 写进 rcNormalPosition 等于告诉系统「这窗口正常就这么大」，
+    // 之后还原出来就是一个没最大化的巨型窗口。保留原本的记录。
+    const curCmd = buf.readUInt32LE(8);
     const r = rectOf(hWnd);
-    if (r && r.w > 0 && r.h > 0) {
+    if (r && r.w > 0 && r.h > 0 && curCmd !== SW_SHOWMAXIMIZED) {
       buf.writeInt32LE(r.left, 28);
       buf.writeInt32LE(r.top, 32);
       buf.writeInt32LE(r.right, 36);
@@ -568,6 +605,17 @@ function minimizeWin(hWnd) {
 function restoreWin(hWnd) {
   if (!load()) return { ok: false, error: "no_native" };
   try {
+    const key = String(hWnd);
+    const saved = hiddenShowCmd.get(key);
+    hiddenShowCmd.delete(key);
+
+    // 从「隐藏」状态恢复，且隐藏前是最大化：只能用 SW_SHOWMAXIMIZED。
+    // 走 SW_RESTORE 的话窗口会按普通尺寸摊开，正是用户反馈的那个现象。
+    if (!fns.IsWindowVisible(hWnd) && saved === SW_SHOWMAXIMIZED) {
+      fns.ShowWindow(hWnd, SW_SHOWMAXIMIZED);
+      return { ok: true, restored: true, maximized: true };
+    }
+
     // 先记住最小化前的实际矩形（GetWindowRect 在最小化时仍是最后一次正常位置）
     const before = rectOf(hWnd);
 
