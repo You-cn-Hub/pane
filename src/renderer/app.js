@@ -45,11 +45,16 @@ function render(list) {
       ? `<img class="ico" src="${p.icon}" alt="">`
       : `<span class="ico ph" style="background:${p.color}">${p.short}</span>`;
 
+    // 正在关闭的条目：整表重绘时也要保持「关闭中」的样子，
+    // 否则轮询一刷新动画就没了，看起来像刚被点开又关上
+    const closing = pendingOff.has(p.id);
     const statusText = !p.exeOk
       ? "找不到程序"
-      : running
-        ? "运行中"
-        : "未启动";
+      : closing
+        ? "关闭中"
+        : running
+          ? "运行中"
+          : "未启动";
 
     row.innerHTML = `
       ${iconHtml}
@@ -57,7 +62,7 @@ function render(list) {
         <span class="nm">${p.name}</span>
         <span class="st">${statusText}</span>
       </span>
-      <span class="switch${running ? " on" : ""}" role="switch" aria-checked="${running}"></span>
+      <span class="switch${running ? " on" : ""}${closing ? " busy" : ""}" role="switch" aria-checked="${running}"></span>
     `;
 
     // 点整行：显示 / 收起界面
@@ -125,8 +130,12 @@ function render(list) {
 
       const wasRunning = sw.classList.contains("on");
       const wantRunning = !wasRunning;
-      // 重新启动时把「正在关闭」的按住标记清掉，否则会一直显示成灰的
+      // 按住标记必须在这里就设好，不能等 await 回来。
+      // 关闭要等好几秒（等程序自己退、再强杀），这期间 12 秒轮询会来一次整表重绘，
+      // 那时若没有标记，render 会按真实状态（进程还在）把胶囊画回绿色 ——
+      // 用户看到的就是「关闭中 → 突然变开启 → 又变关闭」跳两下。
       if (wantRunning) pendingOff.delete(p.id);
+      else pendingOff.add(p.id);
 
       // 1) 立刻反馈：切状态 + 加 loading 动效
       sw.classList.toggle("on", wantRunning);
@@ -288,15 +297,18 @@ async function refresh() {
 function paintRow(id, running) {
   for (const row of listEl.children) {
     if (!row.dataset || row.dataset.id !== id) continue;
+    // 正在关闭的条目：保持「关闭中」的样子，别提前写成「未启动」
+    const closing = pendingOff.has(id);
     const sw = row.querySelector(".switch");
     if (sw) {
       sw.classList.toggle("on", running);
+      sw.classList.toggle("busy", closing);
       sw.setAttribute("aria-checked", String(running));
     }
     const st = row.querySelector(".st");
     // 行内可能有「当前 / 已收起」这类临时文案，别覆盖
     if (st && !row.classList.contains("active")) {
-      st.textContent = running ? "运行中" : "未启动";
+      st.textContent = closing ? "关闭中" : running ? "运行中" : "未启动";
     }
     return;
   }
