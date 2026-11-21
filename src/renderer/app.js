@@ -149,7 +149,18 @@ function render(list) {
       row.classList.remove("pending");
 
       if (!r || !r.ok) {
-        // 2) 失败才回退到原状态
+        // 关闭失败时不要立刻回弹成绿色：后端这一刻报失败，
+        // 往往只是「强杀已经发出、进程还在收尾」，过一两秒它就真的没了。
+        // 立刻回绿会让人看到「灰 → 绿 → 灰」来回跳，
+        // 所以先按住不动，交给 watchQuit 继续盯，真正没关掉才回退。
+        if (!wantRunning) {
+          pendingOff.add(p.id);
+          paintRow(p.id, false);
+          watchQuit(p.id, { failed: true, error: (r && (r.error || r.msg)) || "关闭失败" });
+          tip((r && (r.error || r.msg)) || "关闭失败，正在等它退出", true);
+          return;
+        }
+        // 启动失败：回退到原状态
         sw.classList.toggle("on", wasRunning);
         sw.setAttribute("aria-checked", String(wasRunning));
         if (st) st.textContent = prevStatus;
@@ -294,8 +305,11 @@ function paintRow(id, running) {
 /**
  * 关闭之后盯一会儿：进程真的退了就放开按住标记。
  * 超时还没退，说明程序赖着不走（或后端探测出错），如实画回运行中。
+ *
+ * @param {{failed?:boolean, error?:string}} [opts] failed 表示后端已经报过关闭失败，
+ *        超时提示要说清是「关了但没关掉」，而不是「还在退出」
  */
-function watchQuit(id) {
+function watchQuit(id, opts = {}) {
   const started = Date.now();
   const timer = setInterval(async () => {
     if (!pendingOff.has(id)) {
@@ -319,7 +333,7 @@ function watchQuit(id) {
       pendingOff.delete(id);
       clearInterval(timer);
       paintRow(id, true);
-      tip("已发出关闭，但程序还没退出", true);
+      tip(opts.failed ? opts.error || "没关掉，程序还在运行" : "已发出关闭，但程序还没退出", true);
     }
   }, 500);
   if (timer.unref) timer.unref();
