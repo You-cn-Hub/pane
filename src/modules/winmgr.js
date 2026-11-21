@@ -144,21 +144,35 @@ function createWinMgr(deps) {
         // Win32 强显会让 Chromium 的 JS 层收不到通知，界面卡住、标题栏消失
         // （详见 win32.clickTrayIcon 的注释）。托盘点不出来才退回 Win32 还原。
         const st = native.stateOf(w.hWnd);
-        if (st.ok && !st.visible && typeof native.clickTrayIcon === "function") {
+        if (st.ok && !st.visible && typeof native.pokeTrayIcon === "function") {
           return (async () => {
-            const tr = await native.clickTrayIcon(wantProc);
-            if (tr.ok) {
-              await new Promise((r) => setTimeout(r, 500));
+            const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+            const done = async (via) => {
+              await wait(500);
               const after = native.stateOf(w.hWnd);
-              if (after.visible) {
-                const fr = native.focus(w.hWnd);
-                return { ok: true, action: "front", focused: !!fr.focused, via: "tray" };
+              if (!after.visible) return null;
+              const fr = native.focus(w.hWnd);
+              return { ok: true, action: "front", focused: !!fr.focused, via };
+            };
+            // 一、发消息让程序自己显示：不碰鼠标，最干净
+            const msg = native.pokeTrayIcon(wantProc);
+            if (msg.ok) {
+              const r1 = await done("tray-message");
+              if (r1) return r1;
+            }
+            // 二、退回真实点击托盘图标（会短暂借用光标）
+            if (typeof native.clickTrayIcon === "function") {
+              const tr = await native.clickTrayIcon(wantProc);
+              if (tr.ok) {
+                const r2 = await done("tray-click");
+                if (r2) return r2;
               }
             }
+            // 三、都不行才用 Win32 强显（Electron 下界面会卡，只是兜底）
             const rr = native.restoreWin(w.hWnd);
             if (!rr.ok) return rr;
             const fr = native.focus(w.hWnd);
-            return { ok: true, action: "front", focused: !!fr.focused, via: fr.via, trayError: tr && tr.error };
+            return { ok: true, action: "front", focused: !!fr.focused, via: fr.via, trayError: msg && msg.error };
           })();
         }
 

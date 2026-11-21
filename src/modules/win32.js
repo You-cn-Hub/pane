@@ -736,6 +736,46 @@ function trayIconRect(procName) {
 const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 
 /**
+ * 给托盘图标投一条消息，让程序自己把窗口打开 —— 不碰鼠标。
+ *
+ * 原理：点托盘图标时，explorer 并不会"模拟点击"，而是给图标所属的窗口
+ * 发一条程序自己注册的回调消息。Electron 的托盘宿主窗口
+ * （class = Electron_NotifyIconHostWindow）用的是 WM_APP + 1，
+ * wParam 是图标 id，lParam 是鼠标消息。
+ *
+ * 实测（DSH）：SendMessage(host, WM_APP+1, 3, WM_LBUTTONDOWN) 就能把
+ * 隐藏的窗口正常唤出来，尺寸和布局都保持原样。比移动光标安全得多：
+ * 不抢用户的鼠标、不受任务栏自动隐藏影响。
+ *
+ * @returns {{ok:boolean, via?:string, error?:string}}
+ */
+function pokeTrayIcon(procName) {
+  if (!load() || !procName) return { ok: false, error: "no_native" };
+  const found = trayIconRect(procName);
+  if (!found) return { ok: false, error: "no_tray_icon" };
+  try {
+    if (!fns.SendMessageTimeoutW) {
+      fns.SendMessageTimeoutW = user32.func(
+        "intptr_t SendMessageTimeoutW(intptr_t h, uint32 msg, intptr_t wp, intptr_t lp, uint32 flags, uint32 timeout, _Out_ intptr_t* result)"
+      );
+    }
+    const WM_LBUTTONDOWN = 0x0201;
+    const WM_LBUTTONUP = 0x0202;
+    const WM_APP = 0x8000;
+    const SMTO_ABORTIFHUNG = 0x0002;
+    const hwnd = BigInt(found.hWnd);
+    const uid = BigInt(found.uid);
+    const res = Buffer.alloc(8);
+    // 先按下再松开：有些实现只在 DOWN 里处理，有些等 UP 凑成一次完整点击
+    fns.SendMessageTimeoutW(hwnd, WM_APP + 1, uid, BigInt(WM_LBUTTONDOWN), SMTO_ABORTIFHUNG, 800, res);
+    fns.SendMessageTimeoutW(hwnd, WM_APP + 1, uid, BigInt(WM_LBUTTONUP), SMTO_ABORTIFHUNG, 800, res);
+    return { ok: true, via: "message", uid: found.uid };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+}
+
+/**
  * 点一下这个程序的托盘图标，让程序自己把窗口显示出来。
  *
  * 任务栏自动隐藏时图标会被挤到屏幕外，这时先把光标压到屏幕底边把任务栏唤出来，
@@ -1048,6 +1088,7 @@ module.exports = {
   countProcess,
   trayIconRect,
   clickTrayIcon,
+  pokeTrayIcon,
   showCmdOf,
   idleMs,
 };
